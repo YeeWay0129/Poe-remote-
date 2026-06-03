@@ -4,6 +4,12 @@
 
 Android app 使用手動輸入 host 位址連線到 Windows host。位址可以是 LAN IP，也可以是 Tailscale/ZeroTier IP。首版不提供公開帳號、NAT 穿透或 relay。
 
+開發階段 signaling endpoint：
+
+- 預設位址：`ws://<host>:7443/signaling`
+- VPN/LAN 內使用 plain WebSocket，外網暴露不列入支援範圍。
+- WSS/TLS 會在 host 安裝流程與憑證儲存完成後接上；不允許把 plain WebSocket 直接暴露到公開網路。
+
 ## 配對
 
 1. Host 設定固定配對密碼。
@@ -68,6 +74,16 @@ WebSocket/WSS signaling 訊息以 `type` 欄位區分：
 {
   "kind": "keyboard",
   "keyCode": 87,
+  "action": "down"
+}
+```
+
+滑鼠按鍵事件：
+
+```json
+{
+  "kind": "mouse_button",
+  "button": "left",
   "action": "down"
 }
 ```

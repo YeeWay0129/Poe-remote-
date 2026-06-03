@@ -2,6 +2,7 @@ package com.remotepoe.app.remote
 
 import java.security.MessageDigest
 import java.util.UUID
+import org.json.JSONObject
 
 enum class SignalingType(val wireName: String) {
     Auth("auth"),
@@ -19,6 +20,13 @@ data class SignalingMessage(
     val requestId: String,
     val payload: SignalingPayload,
 )
+
+fun SignalingMessage.toJsonString(): String =
+    JSONObject()
+        .put("type", type.wireName)
+        .put("requestId", requestId)
+        .put("payload", payload.toJsonObject())
+        .toString()
 
 sealed interface SignalingPayload {
     data class Auth(
@@ -48,6 +56,69 @@ sealed interface SignalingPayload {
         val event: RemoteInputEvent,
     ) : SignalingPayload
 }
+
+private fun SignalingPayload.toJsonObject(): JSONObject =
+    when (this) {
+        is SignalingPayload.Auth -> JSONObject()
+            .put("deviceId", deviceId)
+            .put("deviceName", deviceName)
+            .put("publicKey", publicKey)
+            .put("passwordHash", passwordHash)
+
+        is SignalingPayload.DeviceInfo -> JSONObject()
+            .put("deviceId", deviceId)
+            .put("deviceName", deviceName)
+            .put("appVersion", appVersion)
+            .put("supportsExternalKeyboard", supportsExternalKeyboard)
+            .put("supportsExternalMouse", supportsExternalMouse)
+
+        is SignalingPayload.Stream -> JSONObject()
+            .put("width", width)
+            .put("height", height)
+            .put("fps", fps)
+            .put("bitrateKbps", bitrateKbps)
+            .put("codec", codec)
+            .put("displayId", JSONObject.NULL)
+
+        is SignalingPayload.Input -> event.toJsonObject()
+    }
+
+private fun RemoteInputEvent.toJsonObject(): JSONObject =
+    when (this) {
+        is RemoteInputEvent.Keyboard -> JSONObject()
+            .put("kind", "keyboard")
+            .put("keyCode", keyCode)
+            .put("action", if (action == android.view.KeyEvent.ACTION_DOWN) "down" else "up")
+
+        is RemoteInputEvent.MouseMove -> JSONObject()
+            .put("kind", "mouse_move")
+            .put("dx", dx)
+            .put("dy", dy)
+            .put("mode", mode.name.lowercase())
+
+        is RemoteInputEvent.MouseButton -> JSONObject()
+            .put("kind", "mouse_button")
+            .put("button", buttonState.toMouseButtonName())
+            .put(
+                "action",
+                if (action == android.view.MotionEvent.ACTION_BUTTON_PRESS) "down" else "up",
+            )
+
+        is RemoteInputEvent.MouseWheel -> JSONObject()
+            .put("kind", "mouse_wheel")
+            .put("deltaX", deltaX)
+            .put("deltaY", deltaY)
+    }
+
+private fun Int.toMouseButtonName(): String =
+    when {
+        this and android.view.MotionEvent.BUTTON_PRIMARY != 0 -> "left"
+        this and android.view.MotionEvent.BUTTON_SECONDARY != 0 -> "right"
+        this and android.view.MotionEvent.BUTTON_TERTIARY != 0 -> "middle"
+        this and android.view.MotionEvent.BUTTON_BACK != 0 -> "back"
+        this and android.view.MotionEvent.BUTTON_FORWARD != 0 -> "forward"
+        else -> "left"
+    }
 
 data class DeviceIdentity(
     val deviceId: String,
@@ -103,20 +174,22 @@ class SignalingSession(
         return snapshotOutbox()
     }
 
-    fun sendInput(event: RemoteInputEvent) {
-        if (event.isSingleUserAction()) {
-            enqueue(SignalingType.InputEvent, SignalingPayload.Input(event))
-        }
+    fun sendInput(event: RemoteInputEvent): SignalingMessage? {
+        if (!event.isSingleUserAction()) return null
+
+        return enqueue(SignalingType.InputEvent, SignalingPayload.Input(event))
     }
 
     fun snapshotOutbox(): List<SignalingMessage> = outbox.toList()
 
-    private fun enqueue(type: SignalingType, payload: SignalingPayload) {
-        outbox += SignalingMessage(
+    private fun enqueue(type: SignalingType, payload: SignalingPayload): SignalingMessage {
+        val message = SignalingMessage(
             type = type,
             requestId = UUID.randomUUID().toString(),
             payload = payload,
         )
+        outbox += message
+        return message
     }
 }
 
