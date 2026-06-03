@@ -54,6 +54,7 @@ Android:
 ```powershell
 cd android
 .\gradlew.bat :app:assembleDebug --console=plain --warning-mode=summary
+.\gradlew.bat :app:testDebugUnitTest --console=plain --warning-mode=summary
 ```
 
-Android build 需要 Android SDK、JDK 17+ 與 Gradle wrapper 可用。
+Android build 需要 Android SDK、JDK 17+ 與 Gradle wrapper 可用。本 repo 目前位於非 ASCII 路徑，Android unit test 會先把 test classes 複製到 `%USERPROFILE%\.gradle\remote-poe\android-debug-unit-test`，避免 Gradle test worker classpath 編碼問題。

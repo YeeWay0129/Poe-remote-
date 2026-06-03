@@ -3,11 +3,12 @@ package com.remotepoe.app.remote
 import android.os.Handler
 import android.os.Looper
 
-class RemoteClient(
+class RemoteClient @JvmOverloads constructor(
     private val transport: SignalingTransport = OkHttpSignalingTransport(),
     private val peerConnection: PeerConnectionGateway = NoopPeerConnectionGateway(),
+    private val callbackDispatcher: ((() -> Unit) -> Unit)? = null,
 ) {
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private var signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
     private var offerStarted = false
 
@@ -15,7 +16,7 @@ class RemoteClient(
 
     init {
         transport.onStateChanged = { transportState, message ->
-            mainHandler.post {
+            dispatch {
                 if (transportState == TransportState.Connected) {
                     startPeerOffer()
                 }
@@ -23,18 +24,18 @@ class RemoteClient(
             }
         }
         transport.onMessageReceived = { message ->
-            mainHandler.post { handleSignalingMessage(message) }
+            dispatch { handleSignalingMessage(message) }
         }
         peerConnection.onLocalOffer = { sdp ->
-            mainHandler.post { sendOffer(sdp) }
+            dispatch { sendOffer(sdp) }
         }
         peerConnection.onLocalIceCandidate = { candidate ->
-            mainHandler.post {
+            dispatch {
                 sendIce(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex)
             }
         }
         peerConnection.onError = { message ->
-            mainHandler.post {
+            dispatch {
                 onConnectionChanged?.invoke(ConnectionState.Failed, message)
             }
         }
@@ -107,6 +108,15 @@ class RemoteClient(
             }
 
             else -> Unit
+        }
+    }
+
+    private fun dispatch(action: () -> Unit) {
+        val dispatcher = callbackDispatcher
+        if (dispatcher == null) {
+            mainHandler.post(action)
+        } else {
+            dispatcher(action)
         }
     }
 }
