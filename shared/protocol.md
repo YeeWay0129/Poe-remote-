@@ -99,6 +99,8 @@ ICE candidate:
 
 Host 目前會記錄最後收到的 offer SDP bytes、answer SDP bytes、ICE candidate 數量與最後的 `sdpMid`，供 UI 顯示 signaling 狀態。實際 peer connection 與 media track 仍是後續階段。
 
+Android 目前會在 WebSocket signaling 連線成功後建立本地 WebRTC peer connection，建立 `control` data channel 以產生 offer，並把本地 offer/ICE 透過 signaling 送到 host。Host 回傳 answer/ICE 後，Android 會套用到同一個 peer connection。首版輸入事件仍走 WebSocket `input_event`，之後再切到 WebRTC data channel。
+
 ## Input event payload
 
 鍵盤：

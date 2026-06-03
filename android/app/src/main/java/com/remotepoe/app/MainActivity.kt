@@ -39,6 +39,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.remotepoe.app.remote.AndroidWebRtcPeerConnectionGateway
 import com.remotepoe.app.remote.ConnectionState
 import com.remotepoe.app.remote.PointerMode
 import com.remotepoe.app.remote.RemoteClient
@@ -46,10 +47,13 @@ import com.remotepoe.app.remote.RemoteInputEvent
 import com.remotepoe.app.remote.StreamConfig
 
 class MainActivity : ComponentActivity() {
-    private val remoteClient = RemoteClient()
+    private lateinit var remoteClient: RemoteClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        remoteClient = RemoteClient(
+            peerConnection = AndroidWebRtcPeerConnectionGateway(applicationContext),
+        )
         enterImmersiveMode()
 
         setContent {
@@ -138,7 +142,7 @@ private fun ConnectScreen(
         verticalArrangement = Arrangement.Center,
     ) {
         Text("遠端 POE", color = Color.White, fontSize = 30.sp)
-        Text("輸入 Windows host 的 LAN 或 Tailscale/ZeroTier 位址。", color = Color(0xFFB7C0CF))
+        Text("連線到 Windows host 的 LAN 或 Tailscale/ZeroTier 位址。", color = Color(0xFFB7C0CF))
 
         OutlinedTextField(
             modifier = Modifier
@@ -240,7 +244,7 @@ private fun forwardPointerEvent(
                     dx = event.x.toInt(),
                     dy = event.y.toInt(),
                     mode = if (isMouse) PointerMode.Relative else PointerMode.Absolute,
-                )
+                ),
             )
         }
 
@@ -254,7 +258,7 @@ private fun forwardPointerEvent(
                 RemoteInputEvent.MouseWheel(
                     deltaX = event.getAxisValue(MotionEvent.AXIS_HSCROLL).toInt(),
                     deltaY = event.getAxisValue(MotionEvent.AXIS_VSCROLL).toInt(),
-                )
+                ),
             )
         }
     }

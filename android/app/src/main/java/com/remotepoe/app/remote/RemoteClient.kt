@@ -5,16 +5,37 @@ import android.os.Looper
 
 class RemoteClient(
     private val transport: SignalingTransport = OkHttpSignalingTransport(),
+    private val peerConnection: PeerConnectionGateway = NoopPeerConnectionGateway(),
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
+    private var offerStarted = false
 
     var onConnectionChanged: ((ConnectionState, String?) -> Unit)? = null
 
     init {
         transport.onStateChanged = { transportState, message ->
             mainHandler.post {
+                if (transportState == TransportState.Connected) {
+                    startPeerOffer()
+                }
                 onConnectionChanged?.invoke(transportState.toConnectionState(), message)
+            }
+        }
+        transport.onMessageReceived = { message ->
+            mainHandler.post { handleSignalingMessage(message) }
+        }
+        peerConnection.onLocalOffer = { sdp ->
+            mainHandler.post { sendOffer(sdp) }
+        }
+        peerConnection.onLocalIceCandidate = { candidate ->
+            mainHandler.post {
+                sendIce(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex)
+            }
+        }
+        peerConnection.onError = { message ->
+            mainHandler.post {
+                onConnectionChanged?.invoke(ConnectionState.Failed, message)
             }
         }
     }
@@ -24,6 +45,7 @@ class RemoteClient(
             return ConnectionState.Failed
         }
 
+        offerStarted = false
         val url = host.toSignalingUrl()
         val initialMessages = signalingSession.start(password)
         return transport.connect(url, initialMessages).toConnectionState()
@@ -31,7 +53,9 @@ class RemoteClient(
 
     fun disconnect() {
         transport.close()
+        peerConnection.close()
         signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
+        offerStarted = false
     }
 
     fun sendInput(event: RemoteInputEvent) {
@@ -51,6 +75,40 @@ class RemoteClient(
     }
 
     fun snapshotSignalingOutbox(): List<SignalingMessage> = signalingSession.snapshotOutbox()
+
+    private fun startPeerOffer() {
+        if (offerStarted) return
+
+        offerStarted = true
+        peerConnection.start()
+        peerConnection.createOffer()
+    }
+
+    private fun handleSignalingMessage(message: SignalingMessage) {
+        when (val payload = message.payload) {
+            is SignalingPayload.SessionDescription -> {
+                if (message.type == SignalingType.Answer) {
+                    peerConnection.setRemoteAnswer(payload.sdp)
+                }
+            }
+
+            is SignalingPayload.Ice -> {
+                peerConnection.addRemoteIceCandidate(
+                    RemoteIceCandidate(
+                        candidate = payload.candidate,
+                        sdpMid = payload.sdpMid,
+                        sdpMLineIndex = payload.sdpMLineIndex,
+                    ),
+                )
+            }
+
+            is SignalingPayload.Error -> {
+                onConnectionChanged?.invoke(ConnectionState.Failed, payload.message)
+            }
+
+            else -> Unit
+        }
+    }
 }
 
 private fun String.toSignalingUrl(): String =

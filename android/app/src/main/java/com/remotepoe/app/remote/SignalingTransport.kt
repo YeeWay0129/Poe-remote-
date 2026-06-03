@@ -16,6 +16,7 @@ enum class TransportState {
 interface SignalingTransport {
     val state: TransportState
     var onStateChanged: ((TransportState, String?) -> Unit)?
+    var onMessageReceived: ((SignalingMessage) -> Unit)?
 
     fun connect(url: String, initialMessages: List<SignalingMessage>): TransportState
 
@@ -31,6 +32,7 @@ class RecordingSignalingTransport : SignalingTransport {
         private set
 
     override var onStateChanged: ((TransportState, String?) -> Unit)? = null
+    override var onMessageReceived: ((SignalingMessage) -> Unit)? = null
 
     override fun connect(url: String, initialMessages: List<SignalingMessage>): TransportState {
         if (url.isBlank()) {
@@ -57,6 +59,10 @@ class RecordingSignalingTransport : SignalingTransport {
 
     fun snapshotSentJson(): List<String> = sent.toList()
 
+    fun receive(json: String) {
+        parseSignalingMessage(json)?.let { onMessageReceived?.invoke(it) }
+    }
+
     private fun updateState(nextState: TransportState, message: String?) {
         state = nextState
         onStateChanged?.invoke(nextState, message)
@@ -73,6 +79,7 @@ class OkHttpSignalingTransport(
         private set
 
     override var onStateChanged: ((TransportState, String?) -> Unit)? = null
+    override var onMessageReceived: ((SignalingMessage) -> Unit)? = null
 
     override fun connect(url: String, initialMessages: List<SignalingMessage>): TransportState {
         if (url.isBlank()) {
@@ -95,6 +102,10 @@ class OkHttpSignalingTransport(
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     updateState(TransportState.Failed, t.message ?: "WebSocket connection failed.")
                     pendingMessages.clear()
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    parseSignalingMessage(text)?.let { onMessageReceived?.invoke(it) }
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {

@@ -21,6 +21,15 @@ data class SignalingMessage(
     val payload: SignalingPayload,
 )
 
+fun parseSignalingMessage(json: String): SignalingMessage? =
+    runCatching {
+        val root = JSONObject(json)
+        val type = root.getString("type").toSignalingType()
+        val requestId = root.getString("requestId")
+        val payload = root.getJSONObject("payload").toSignalingPayload(type)
+        SignalingMessage(type, requestId, payload)
+    }.getOrNull()
+
 fun SignalingMessage.toJsonString(): String =
     JSONObject()
         .put("type", type.wireName)
@@ -65,6 +74,12 @@ sealed interface SignalingPayload {
     data class Input(
         val event: RemoteInputEvent,
     ) : SignalingPayload
+
+    data class Error(
+        val code: String,
+        val message: String,
+        val recoverable: Boolean,
+    ) : SignalingPayload
 }
 
 private fun SignalingPayload.toJsonObject(): JSONObject =
@@ -99,7 +114,65 @@ private fun SignalingPayload.toJsonObject(): JSONObject =
             .put("sdpMLineIndex", sdpMLineIndex ?: JSONObject.NULL)
 
         is SignalingPayload.Input -> event.toJsonObject()
+
+        is SignalingPayload.Error -> JSONObject()
+            .put("code", code)
+            .put("message", message)
+            .put("recoverable", recoverable)
     }
+
+private fun String.toSignalingType(): SignalingType =
+    SignalingType.entries.first { type -> type.wireName == this }
+
+private fun JSONObject.toSignalingPayload(type: SignalingType): SignalingPayload =
+    when (type) {
+        SignalingType.Auth -> SignalingPayload.Auth(
+            deviceId = getString("deviceId"),
+            deviceName = getString("deviceName"),
+            publicKey = getString("publicKey"),
+            passwordHash = getString("passwordHash"),
+        )
+
+        SignalingType.DeviceInfo -> SignalingPayload.DeviceInfo(
+            deviceId = getString("deviceId"),
+            deviceName = getString("deviceName"),
+            appVersion = getString("appVersion"),
+            supportsExternalKeyboard = getBoolean("supportsExternalKeyboard"),
+            supportsExternalMouse = getBoolean("supportsExternalMouse"),
+        )
+
+        SignalingType.StreamConfig -> SignalingPayload.Stream(
+            width = getInt("width"),
+            height = getInt("height"),
+            fps = getInt("fps"),
+            bitrateKbps = getInt("bitrateKbps"),
+            codec = optString("codec", "h264"),
+        )
+
+        SignalingType.Offer,
+        SignalingType.Answer -> SignalingPayload.SessionDescription(
+            sdp = getString("sdp"),
+        )
+
+        SignalingType.Ice -> SignalingPayload.Ice(
+            candidate = getString("candidate"),
+            sdpMid = nullableString("sdpMid"),
+            sdpMLineIndex = nullableInt("sdpMLineIndex"),
+        )
+
+        SignalingType.InputEvent -> error("input_event parsing is not supported on Android client")
+        SignalingType.Error -> SignalingPayload.Error(
+            code = getString("code"),
+            message = getString("message"),
+            recoverable = getBoolean("recoverable"),
+        )
+    }
+
+private fun JSONObject.nullableString(name: String): String? =
+    if (isNull(name)) null else getString(name)
+
+private fun JSONObject.nullableInt(name: String): Int? =
+    if (isNull(name)) null else getInt(name)
 
 private fun RemoteInputEvent.toJsonObject(): JSONObject =
     when (this) {

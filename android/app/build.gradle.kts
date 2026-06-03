@@ -42,6 +42,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.github.webrtc-sdk:android:144.7559.05")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
