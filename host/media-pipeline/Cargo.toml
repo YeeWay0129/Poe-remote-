@@ -15,7 +15,10 @@ windows-mf-h264 = ["dep:windows"]
 host-core = { path = "../host-core" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61.3", optional = true, features = ["Win32_Media_MediaFoundation"] }
+windows = { version = "0.61.3", optional = true, features = [
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com"
+] }
 windows-sys = { version = "0.61.2", optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
