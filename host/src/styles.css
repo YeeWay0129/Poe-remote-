@@ -34,6 +34,11 @@ p {
   background: #ffffff;
 }
 
+.status-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: start;
+}
+
 .label {
   display: block;
   color: #5b6472;

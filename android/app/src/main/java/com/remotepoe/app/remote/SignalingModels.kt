@@ -52,6 +52,16 @@ sealed interface SignalingPayload {
         val codec: String = "h264",
     ) : SignalingPayload
 
+    data class SessionDescription(
+        val sdp: String,
+    ) : SignalingPayload
+
+    data class Ice(
+        val candidate: String,
+        val sdpMid: String?,
+        val sdpMLineIndex: Int?,
+    ) : SignalingPayload
+
     data class Input(
         val event: RemoteInputEvent,
     ) : SignalingPayload
@@ -79,6 +89,14 @@ private fun SignalingPayload.toJsonObject(): JSONObject =
             .put("bitrateKbps", bitrateKbps)
             .put("codec", codec)
             .put("displayId", JSONObject.NULL)
+
+        is SignalingPayload.SessionDescription -> JSONObject()
+            .put("sdp", sdp)
+
+        is SignalingPayload.Ice -> JSONObject()
+            .put("candidate", candidate)
+            .put("sdpMid", sdpMid ?: JSONObject.NULL)
+            .put("sdpMLineIndex", sdpMLineIndex ?: JSONObject.NULL)
 
         is SignalingPayload.Input -> event.toJsonObject()
     }
@@ -180,7 +198,34 @@ class SignalingSession(
         return enqueue(SignalingType.InputEvent, SignalingPayload.Input(event))
     }
 
+    fun sendOffer(sdp: String): SignalingMessage? = sendSessionDescription(SignalingType.Offer, sdp)
+
+    fun sendAnswer(sdp: String): SignalingMessage? = sendSessionDescription(SignalingType.Answer, sdp)
+
+    fun sendIce(
+        candidate: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int?,
+    ): SignalingMessage? {
+        if (candidate.isBlank()) return null
+
+        return enqueue(
+            SignalingType.Ice,
+            SignalingPayload.Ice(
+                candidate = candidate,
+                sdpMid = sdpMid,
+                sdpMLineIndex = sdpMLineIndex,
+            ),
+        )
+    }
+
     fun snapshotOutbox(): List<SignalingMessage> = outbox.toList()
+
+    private fun sendSessionDescription(type: SignalingType, sdp: String): SignalingMessage? {
+        if (sdp.isBlank()) return null
+
+        return enqueue(type, SignalingPayload.SessionDescription(sdp))
+    }
 
     private fun enqueue(type: SignalingType, payload: SignalingPayload): SignalingMessage {
         val message = SignalingMessage(

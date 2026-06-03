@@ -1,46 +1,58 @@
 # 遠端 POE
 
-個人自用的 Android 遠端遊玩 POE 系統。Android app 連線到 Windows PC 上的 Tauri host，透過 WebRTC 串流畫面，並優先轉送 Android 外接鍵盤滑鼠事件來操作 PC。
+個人自用的 Android 遠端遊玩 POE 1 系統。Android app 連到 Windows PC 上的 Tauri host，目標是透過 WebRTC 串流畫面，並優先轉送 Android 外接鍵盤與滑鼠事件來操作 PC。
 
-## 目標
+## 範圍
 
-- Host：Windows + Tauri UI + Rust backend。
-- Android：Kotlin + Jetpack Compose，全螢幕沉浸式串流。
-- 網路：LAN 或 Tailscale/ZeroTier VPN，不自建 relay 或公開帳號系統。
-- 安全：固定配對密碼 + 裝置信任清單，不採純密碼裸連。
-- 輸入：外接鍵盤滑鼠優先；觸控只做 fallback 與連線控制。
+- Host: Windows + Tauri UI + Rust backend。
+- Android: Kotlin + Jetpack Compose，全螢幕沉浸式玩家端。
+- 網路: LAN 或 Tailscale/ZeroTier VPN，不自建公開帳號、NAT 穿透或 relay。
+- 安全: 固定密碼配對搭配信任裝置清單，signaling payload 維持可驗證形狀。
+- 輸入: 一次使用者動作只對應一次鍵鼠事件，不做多鍵巨集。
 
 ## 專案結構
 
 ```text
 android/          Android Kotlin/Compose app
 host/             Tauri Windows host shell
-host/host-core/   可測的 Rust host 核心模型
-shared/           Signaling、stream、input 協定文件
+host/host-core/   Rust 共用設定、配對、stream、input、signaling model
+host/signaling-server/
+                  WebSocket signaling server、event log、input injector
+host/src-tauri/   Tauri commands 與 host app state
+shared/           協定與驗收文件
 ```
 
 ## 目前狀態
 
-這是可延伸的初始實作骨架：
+- `host/host-core` 已有配對、信任裝置、stream config、input event 與 signaling model。
+- `host/signaling-server` 已可處理 `auth`、`device_info`、`stream_config`、`input_event`、`offer`、`answer`、`ice`。
+- Host 已提供 WebSocket signaling server，並在 UI 顯示最近事件、輸入記錄與 WebRTC offer/answer/ice 狀態。
+- Windows build 已接 `SendInput + recording` backend，且 `SendInput` 只在前景視窗標題符合 POE 時執行；非 Windows build 使用 recording backend。
+- Android app 已有連線頁、WebSocket transport、基礎沉浸式畫面、外接鍵鼠 mapping、input event 傳送，以及 offer/answer/ice signaling API。
+- 尚未完成實際 Windows 畫面擷取、H.264 編碼與 WebRTC media track。
 
-- `host/host-core` 已有設定、配對、輸入事件與串流設定模型，以及單元測試。
-- `host/signaling-server` 已有 WebSocket signaling frame 處理、配對、串流設定更新、輸入事件驗證。
-- Windows host 已有 `SendInput` 輸入注入 backend，預設只允許前景視窗標題符合 POE，並保留 recording log 供 UI 除錯。
-- `host/src-tauri` 已有 Tauri command 邊界，用於後續接 Windows 擷取、WebRTC、SendInput。
-- `android/app` 已有 Compose 連線畫面、沉浸式播放器骨架、外接鍵鼠事件轉送與 WebSocket transport 邊界。
-- `shared/protocol.md` 固定首版訊息與行為邊界。
+## 開發指令
 
-真正的 H.264 硬體編碼、WebRTC media track、Windows SendInput 注入仍是下一階段實作項目。
-
-## 驗證
-
-目前可先驗證 Rust host core：
+Rust host:
 
 ```powershell
-rtk cargo test -p host-core
-rtk cargo test -p signaling-server
-cd android
-.\gradlew.bat :app:assembleDebug
+rtk cargo test -p host-core --offline
+rtk cargo test -p signaling-server --offline
+rtk cargo check -p remote-poe-host --offline
 ```
 
-Android/Tauri 完整建置需要安裝 Android SDK、JDK 17+、Node 依賴與 Tauri toolchain。
+Tauri frontend:
+
+```powershell
+cd host
+rtk npm.cmd run typecheck
+```
+
+Android:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --console=plain --warning-mode=summary
+```
+
+Android build 需要 Android SDK、JDK 17+ 與 Gradle wrapper 可用。

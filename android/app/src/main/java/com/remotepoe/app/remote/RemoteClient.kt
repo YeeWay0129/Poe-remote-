@@ -38,6 +38,18 @@ class RemoteClient(
         signalingSession.sendInput(event)?.let(transport::send)
     }
 
+    fun sendOffer(sdp: String) {
+        signalingSession.sendOffer(sdp)?.let(transport::send)
+    }
+
+    fun sendAnswer(sdp: String) {
+        signalingSession.sendAnswer(sdp)?.let(transport::send)
+    }
+
+    fun sendIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
+        signalingSession.sendIce(candidate, sdpMid, sdpMLineIndex)?.let(transport::send)
+    }
+
     fun snapshotSignalingOutbox(): List<SignalingMessage> = signalingSession.snapshotOutbox()
 }
 

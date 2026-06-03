@@ -4,9 +4,9 @@ use host_core::stream::StreamConfig;
 #[cfg(windows)]
 use signaling_server::windows_input::WindowsSendInputInjector;
 use signaling_server::{
-    CompositeInputInjector, RecordingInputInjector, SharedEventLog, SharedHostConfig,
-    SharedInputInjector, SignalingBindConfig, SignalingEventLog, SignalingRuntime, SignalingServer,
-    spawn_plain_ws_server,
+    CompositeInputInjector, PeerSignalingState, RecordingInputInjector, SharedEventLog,
+    SharedHostConfig, SharedInputInjector, SharedPeerSignalingState, SignalingBindConfig,
+    SignalingEventLog, SignalingRuntime, SignalingServer, spawn_plain_ws_server,
 };
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -28,6 +28,14 @@ struct HostStatus {
     trusted_devices: usize,
     #[serde(rename = "streamLabel")]
     stream_label: String,
+    #[serde(rename = "peerPhase")]
+    peer_phase: &'static str,
+    #[serde(rename = "lastOfferBytes")]
+    last_offer_bytes: Option<usize>,
+    #[serde(rename = "lastAnswerBytes")]
+    last_answer_bytes: Option<usize>,
+    #[serde(rename = "iceCandidates")]
+    ice_candidates: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -57,6 +65,7 @@ struct AppState {
     event_log: SharedEventLog,
     recording_input_injector: Arc<RecordingInputInjector>,
     input_injector: SharedInputInjector,
+    peer_state: SharedPeerSignalingState,
     streaming: Mutex<bool>,
     signaling: Mutex<Option<SignalingRuntime>>,
 }
@@ -72,6 +81,11 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         .expect("event log lock poisoned")
         .snapshot();
     let input_events = state.recording_input_injector.snapshot();
+    let peer_state = state
+        .peer_state
+        .lock()
+        .expect("peer signaling lock poisoned")
+        .clone();
 
     HostStatus {
         streaming,
@@ -90,6 +104,10 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
             config.stream.fps,
             config.stream.bitrate_kbps
         ),
+        peer_phase: peer_state.phase.as_str(),
+        last_offer_bytes: peer_state.last_offer_sdp_bytes,
+        last_answer_bytes: peer_state.last_answer_sdp_bytes,
+        ice_candidates: peer_state.received_ice_candidates,
     }
 }
 
@@ -109,10 +127,11 @@ fn stop_streaming(state: tauri::State<'_, AppState>) {
 fn start_signaling(state: tauri::State<'_, AppState>) -> Result<HostStatus, String> {
     let mut signaling = state.signaling.lock().expect("signaling lock poisoned");
     if signaling.is_none() {
-        let server = SignalingServer::from_shared_parts_with_input(
+        let server = SignalingServer::from_shared_parts_with_input_and_peer_state(
             Arc::clone(&state.config),
             Arc::clone(&state.event_log),
             Arc::clone(&state.input_injector),
+            Arc::clone(&state.peer_state),
         );
         let runtime = spawn_plain_ws_server(
             server,
@@ -193,6 +212,7 @@ fn revoke_device(state: tauri::State<'_, AppState>, device_id: String) -> bool {
 fn main() {
     let recording_input_injector = Arc::new(RecordingInputInjector::new(64));
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
+    let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
 
     tauri::Builder::default()
         .manage(AppState {
@@ -205,6 +225,7 @@ fn main() {
             event_log: Arc::new(Mutex::new(SignalingEventLog::new(64))),
             recording_input_injector,
             input_injector,
+            peer_state,
             streaming: Mutex::new(false),
             signaling: Mutex::new(None),
         })

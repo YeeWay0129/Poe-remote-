@@ -12,6 +12,10 @@ type HostStatus = {
   inputBackend: string;
   trustedDevices: number;
   streamLabel: string;
+  peerPhase: string;
+  lastOfferBytes: number | null;
+  lastAnswerBytes: number | null;
+  iceCandidates: number;
 };
 
 function App() {
@@ -57,10 +61,13 @@ function App() {
     <main>
       <header>
         <h1>遠端 POE Host</h1>
-        <p>Windows 主機端，負責接收 Android 連線、串流 POE 畫面與鍵鼠輸入。</p>
+        <p>
+          Windows 主機負責配對、signaling、輸入注入與後續串流管線；Android
+          端透過 LAN 或 VPN 位址連線。
+        </p>
       </header>
 
-      <section className="panel">
+      <section className="panel status-grid">
         <div>
           <span className="label">Signaling</span>
           <strong>{status?.signalingRunning ? "執行中" : "已停止"}</strong>
@@ -68,15 +75,15 @@ function App() {
         </div>
         <div>
           <span className="label">輸入後端</span>
-          <strong>{status?.inputBackend ?? "讀取中"}</strong>
+          <strong>{status?.inputBackend ?? "載入中"}</strong>
         </div>
         <div>
-          <span className="label">串流狀態</span>
+          <span className="label">串流</span>
           <strong>{status?.streaming ? "執行中" : "已停止"}</strong>
         </div>
         <div>
           <span className="label">串流設定</span>
-          <strong>{status?.streamLabel ?? "讀取中"}</strong>
+          <strong>{status?.streamLabel ?? "載入中"}</strong>
         </div>
         <div>
           <span className="label">信任裝置</span>
@@ -92,10 +99,29 @@ function App() {
         </div>
       </section>
 
+      <section className="panel status-grid">
+        <div>
+          <span className="label">WebRTC phase</span>
+          <strong>{status?.peerPhase ?? "idle"}</strong>
+        </div>
+        <div>
+          <span className="label">Offer SDP</span>
+          <strong>{formatBytes(status?.lastOfferBytes)}</strong>
+        </div>
+        <div>
+          <span className="label">Answer SDP</span>
+          <strong>{formatBytes(status?.lastAnswerBytes)}</strong>
+        </div>
+        <div>
+          <span className="label">ICE candidates</span>
+          <strong>{status?.iceCandidates ?? 0}</strong>
+        </div>
+      </section>
+
       <section className="panel">
         <h2>最近 Signaling 事件</h2>
         {recentEvents.length === 0 ? (
-          <p className="muted">尚未收到 Android 訊息。</p>
+          <p className="muted">尚未收到 Android 連線事件。</p>
         ) : (
           <ul className="event-list">
             {recentEvents.map((event, index) => (
@@ -108,7 +134,7 @@ function App() {
       <section className="panel">
         <h2>最近輸入事件</h2>
         {recentInputEvents.length === 0 ? (
-          <p className="muted">尚未收到可注入的鍵鼠事件。</p>
+          <p className="muted">尚未收到鍵盤或滑鼠輸入。</p>
         ) : (
           <ul className="event-list">
             {recentInputEvents.map((event, index) => (
@@ -119,17 +145,23 @@ function App() {
       </section>
 
       <section className="panel">
-        <h2>下一階段</h2>
+        <h2>下一步</h2>
         <ul>
-          <li>把 WebRTC offer/answer/ice 接到 Android 與 host 的 peer connection。</li>
-          <li>接上 Windows Graphics Capture 與 H.264 硬體編碼。</li>
-          <li>替 SendInput 加上權限與焦點檢查，避免輸入送到錯誤視窗。</li>
+          <li>把 Android 的 offer/answer/ice API 接到實際 WebRTC peer connection。</li>
+          <li>Host 串接 Windows Graphics Capture、H.264 編碼與 WebRTC media track。</li>
+          <li>補上持久化設定、系統匣與開機啟動選項。</li>
         </ul>
       </section>
 
       {error && <p className="error">{error}</p>}
     </main>
   );
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes) return "尚未收到";
+
+  return `${bytes} bytes`;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
