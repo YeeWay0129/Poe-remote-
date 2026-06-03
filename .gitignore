@@ -1,0 +1,17 @@
+.gradle/
+.idea/
+.vscode/
+*.iml
+local.properties
+
+android/.gradle/
+android/build/
+android/app/build/
+
+host/node_modules/
+host/dist/
+host/src-tauri/target/
+
+target/
+*.log
+*.tmp

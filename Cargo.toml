@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "host/host-core"
+]
+resolver = "2"

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local/remote-poe/signaling.schema.json",
+  "title": "Remote POE Signaling Message",
+  "type": "object",
+  "required": ["type", "requestId"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["auth", "device_info", "stream_config", "offer", "answer", "ice", "input_event", "error"]
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}
