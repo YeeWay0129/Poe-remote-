@@ -54,6 +54,21 @@ small {
   flex-wrap: wrap;
 }
 
+.event-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: #20242c;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 13px;
+}
+
+.muted {
+  margin: 0;
+  color: #6a7380;
+}
+
 button {
   width: fit-content;
   padding: 10px 14px;

@@ -1,10 +1,13 @@
 use futures_util::{SinkExt, StreamExt};
 use host_core::config::HostConfig;
-use host_core::input::validate_user_event;
+use host_core::input::{
+    ButtonAction, InputEvent, KeyAction, MouseButton, PointerMode, validate_user_event,
+};
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing, is_trusted_device};
 use host_core::signaling::{
     AuthPayload, ErrorPayload, SignalingMessage, SignalingPayload, SignalingType,
 };
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -14,6 +17,89 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
 pub type SharedHostConfig = Arc<Mutex<HostConfig>>;
+pub type SharedEventLog = Arc<Mutex<SignalingEventLog>>;
+pub type SharedInputInjector = Arc<dyn InputInjector>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignalingEventLog {
+    max_len: usize,
+    records: VecDeque<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputInjectionError {
+    BackendUnavailable,
+}
+
+pub trait InputInjector: Send + Sync {
+    fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError>;
+}
+
+#[derive(Debug)]
+pub struct RecordingInputInjector {
+    max_len: usize,
+    records: Mutex<VecDeque<String>>,
+}
+
+impl RecordingInputInjector {
+    pub fn new(max_len: usize) -> Self {
+        Self {
+            max_len,
+            records: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<String> {
+        self.records
+            .lock()
+            .map(|records| records.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn push(&self, record: impl Into<String>) {
+        if self.max_len == 0 {
+            return;
+        }
+
+        if let Ok(mut records) = self.records.lock() {
+            while records.len() >= self.max_len {
+                records.pop_front();
+            }
+            records.push_back(record.into());
+        }
+    }
+}
+
+impl InputInjector for RecordingInputInjector {
+    fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError> {
+        self.push(input_event_summary(event));
+        Ok(())
+    }
+}
+
+impl SignalingEventLog {
+    pub fn new(max_len: usize) -> Self {
+        Self {
+            max_len,
+            records: VecDeque::new(),
+        }
+    }
+
+    pub fn push(&mut self, record: impl Into<String>) {
+        if self.max_len == 0 {
+            return;
+        }
+
+        while self.records.len() >= self.max_len {
+            self.records.pop_front();
+        }
+        self.records.push_back(record.into());
+    }
+
+    pub fn snapshot(&self) -> Vec<String> {
+        self.records.iter().cloned().collect()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignalingBindConfig {
@@ -41,7 +127,7 @@ pub enum ServerEvent {
     DeviceTrusted { device_id: String },
     DeviceAuthenticated { device_id: String },
     StreamConfigUpdated { width: u32, height: u32, fps: u32 },
-    InputAccepted,
+    InputInjected,
     SessionDescriptionReceived(SignalingType),
     IceCandidateReceived,
 }
@@ -58,6 +144,7 @@ pub enum SignalingFrameError {
     InvalidShape,
     Unauthorized,
     InvalidInput,
+    InputInjectionFailed,
     UnsupportedMessage,
     StatePoisoned,
 }
@@ -65,15 +152,40 @@ pub enum SignalingFrameError {
 #[derive(Clone)]
 pub struct SignalingServer {
     state: SharedHostConfig,
+    event_log: SharedEventLog,
+    input_injector: SharedInputInjector,
 }
 
 impl SignalingServer {
     pub fn new(config: HostConfig) -> Self {
-        Self::from_shared_state(Arc::new(Mutex::new(config)))
+        Self::from_shared_parts(
+            Arc::new(Mutex::new(config)),
+            Arc::new(Mutex::new(SignalingEventLog::new(64))),
+        )
     }
 
     pub fn from_shared_state(state: SharedHostConfig) -> Self {
-        Self { state }
+        Self::from_shared_parts(state, Arc::new(Mutex::new(SignalingEventLog::new(64))))
+    }
+
+    pub fn from_shared_parts(state: SharedHostConfig, event_log: SharedEventLog) -> Self {
+        Self::from_shared_parts_with_input(
+            state,
+            event_log,
+            Arc::new(RecordingInputInjector::new(64)),
+        )
+    }
+
+    pub fn from_shared_parts_with_input(
+        state: SharedHostConfig,
+        event_log: SharedEventLog,
+        input_injector: SharedInputInjector,
+    ) -> Self {
+        Self {
+            state,
+            event_log,
+            input_injector,
+        }
     }
 
     pub fn snapshot_config(&self) -> Result<HostConfig, SignalingFrameError> {
@@ -83,7 +195,20 @@ impl SignalingServer {
             .map_err(|_| SignalingFrameError::StatePoisoned)
     }
 
+    pub fn snapshot_recent_events(&self) -> Result<Vec<String>, SignalingFrameError> {
+        self.event_log
+            .lock()
+            .map(|log| log.snapshot())
+            .map_err(|_| SignalingFrameError::StatePoisoned)
+    }
+
     pub fn handle_text_frame(&self, text: &str) -> Result<FrameResult, SignalingFrameError> {
+        let result = self.handle_text_frame_inner(text);
+        self.record_frame_result(&result);
+        result
+    }
+
+    fn handle_text_frame_inner(&self, text: &str) -> Result<FrameResult, SignalingFrameError> {
         let message: SignalingMessage =
             serde_json::from_str(text).map_err(|_| SignalingFrameError::InvalidJson)?;
         message
@@ -123,7 +248,10 @@ impl SignalingServer {
             }
             SignalingPayload::InputEvent(event) => {
                 validate_user_event(&event).map_err(|_| SignalingFrameError::InvalidInput)?;
-                Ok(FrameResult::Accepted(ServerEvent::InputAccepted))
+                self.input_injector
+                    .inject(&event)
+                    .map_err(|_| SignalingFrameError::InputInjectionFailed)?;
+                Ok(FrameResult::Accepted(ServerEvent::InputInjected))
             }
             SignalingPayload::SessionDescription(_) => Ok(FrameResult::Accepted(
                 ServerEvent::SessionDescriptionReceived(message.message_type),
@@ -132,6 +260,24 @@ impl SignalingServer {
                 Ok(FrameResult::Accepted(ServerEvent::IceCandidateReceived))
             }
             SignalingPayload::Error(_) => Err(SignalingFrameError::UnsupportedMessage),
+        }
+    }
+
+    fn record_frame_result(&self, result: &Result<FrameResult, SignalingFrameError>) {
+        let record = match result {
+            Ok(FrameResult::Accepted(event)) => format!("accepted: {}", event.summary()),
+            Ok(FrameResult::Reply(reply)) => {
+                format!(
+                    "reply: {} for {}",
+                    signaling_type_wire_name(&reply.message_type),
+                    reply.request_id
+                )
+            }
+            Err(error) => format!("error: {error:?}"),
+        };
+
+        if let Ok(mut event_log) = self.event_log.lock() {
+            event_log.push(record);
         }
     }
 
@@ -180,6 +326,93 @@ impl SignalingServer {
                 false,
             ))),
         }
+    }
+}
+
+impl ServerEvent {
+    fn summary(&self) -> String {
+        match self {
+            ServerEvent::DeviceTrusted { device_id } => format!("device trusted {device_id}"),
+            ServerEvent::DeviceAuthenticated { device_id } => {
+                format!("device authenticated {device_id}")
+            }
+            ServerEvent::StreamConfigUpdated { width, height, fps } => {
+                format!("stream config {width}x{height}@{fps}")
+            }
+            ServerEvent::InputInjected => "input injected".to_string(),
+            ServerEvent::SessionDescriptionReceived(kind) => {
+                format!("session description {}", signaling_type_wire_name(kind))
+            }
+            ServerEvent::IceCandidateReceived => "ice candidate".to_string(),
+        }
+    }
+}
+
+fn input_event_summary(event: &InputEvent) -> String {
+    match event {
+        InputEvent::Keyboard { key_code, action } => {
+            format!("keyboard {} {key_code}", key_action_name(action))
+        }
+        InputEvent::MouseMove { dx, dy, mode } => {
+            format!("mouse move {} dx={dx} dy={dy}", pointer_mode_name(mode))
+        }
+        InputEvent::MouseButton { button, action } => {
+            format!(
+                "mouse button {} {}",
+                mouse_button_name(button),
+                button_action_name(action)
+            )
+        }
+        InputEvent::MouseWheel { delta_x, delta_y } => {
+            format!("mouse wheel dx={delta_x} dy={delta_y}")
+        }
+        InputEvent::PointerModeChanged(mode) => {
+            format!("pointer mode {}", pointer_mode_name(mode))
+        }
+    }
+}
+
+fn key_action_name(action: &KeyAction) -> &'static str {
+    match action {
+        KeyAction::Down => "down",
+        KeyAction::Up => "up",
+    }
+}
+
+fn button_action_name(action: &ButtonAction) -> &'static str {
+    match action {
+        ButtonAction::Down => "down",
+        ButtonAction::Up => "up",
+    }
+}
+
+fn mouse_button_name(button: &MouseButton) -> &'static str {
+    match button {
+        MouseButton::Left => "left",
+        MouseButton::Right => "right",
+        MouseButton::Middle => "middle",
+        MouseButton::Back => "back",
+        MouseButton::Forward => "forward",
+    }
+}
+
+fn pointer_mode_name(mode: &PointerMode) -> &'static str {
+    match mode {
+        PointerMode::Relative => "relative",
+        PointerMode::Absolute => "absolute",
+    }
+}
+
+fn signaling_type_wire_name(signaling_type: &SignalingType) -> &'static str {
+    match signaling_type {
+        SignalingType::Auth => "auth",
+        SignalingType::DeviceInfo => "device_info",
+        SignalingType::StreamConfig => "stream_config",
+        SignalingType::Offer => "offer",
+        SignalingType::Answer => "answer",
+        SignalingType::Ice => "ice",
+        SignalingType::InputEvent => "input_event",
+        SignalingType::Error => "error",
     }
 }
 
@@ -425,7 +658,43 @@ mod tests {
 
         assert_eq!(
             server.handle_text_frame(&json),
-            Ok(FrameResult::Accepted(ServerEvent::InputAccepted))
+            Ok(FrameResult::Accepted(ServerEvent::InputInjected))
+        );
+    }
+
+    #[test]
+    fn input_frame_records_injected_keyboard_action() {
+        let injector = Arc::new(RecordingInputInjector::new(8));
+        let server = SignalingServer::from_shared_parts_with_input(
+            Arc::new(Mutex::new(HostConfig::new("hash"))),
+            Arc::new(Mutex::new(SignalingEventLog::new(8))),
+            injector.clone(),
+        );
+        let message = SignalingMessage::input_event(
+            "req-6",
+            InputEvent::Keyboard {
+                key_code: 87,
+                action: KeyAction::Down,
+            },
+        );
+        let json = serde_json::to_string(&message).expect("message serializes");
+
+        server.handle_text_frame(&json).expect("frame accepted");
+
+        assert_eq!(injector.snapshot(), vec!["keyboard down 87".to_string()]);
+    }
+
+    #[test]
+    fn event_log_records_recent_frame_results() {
+        let server = SignalingServer::new(HostConfig::new("hash"));
+        let message = SignalingMessage::stream_config("req-5", StreamConfig::fallback_720p60());
+        let json = serde_json::to_string(&message).expect("message serializes");
+
+        server.handle_text_frame(&json).expect("frame accepted");
+
+        assert_eq!(
+            server.snapshot_recent_events().unwrap(),
+            vec!["accepted: stream config 1280x720@60".to_string()]
         );
     }
 

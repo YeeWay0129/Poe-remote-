@@ -1,24 +1,32 @@
 package com.remotepoe.app.remote
 
+import android.os.Handler
+import android.os.Looper
+
 class RemoteClient(
     private val transport: SignalingTransport = OkHttpSignalingTransport(),
 ) {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
+
+    var onConnectionChanged: ((ConnectionState, String?) -> Unit)? = null
+
+    init {
+        transport.onStateChanged = { transportState, message ->
+            mainHandler.post {
+                onConnectionChanged?.invoke(transportState.toConnectionState(), message)
+            }
+        }
+    }
 
     fun connect(host: String, password: String): ConnectionState {
         if (host.isBlank() || password.isBlank()) {
-            return ConnectionState.Disconnected
+            return ConnectionState.Failed
         }
 
         val url = host.toSignalingUrl()
         val initialMessages = signalingSession.start(password)
-        return when (transport.connect(url, initialMessages)) {
-            TransportState.Connected,
-            TransportState.Connecting -> ConnectionState.Connected
-
-            TransportState.Disconnected,
-            TransportState.Failed -> ConnectionState.Disconnected
-        }
+        return transport.connect(url, initialMessages).toConnectionState()
     }
 
     fun disconnect() {
@@ -37,4 +45,12 @@ private fun String.toSignalingUrl(): String =
     when {
         startsWith("ws://") || startsWith("wss://") -> this
         else -> "ws://$this/signaling"
+    }
+
+private fun TransportState.toConnectionState(): ConnectionState =
+    when (this) {
+        TransportState.Disconnected -> ConnectionState.Disconnected
+        TransportState.Connecting -> ConnectionState.Connecting
+        TransportState.Connected -> ConnectionState.Connected
+        TransportState.Failed -> ConnectionState.Failed
     }

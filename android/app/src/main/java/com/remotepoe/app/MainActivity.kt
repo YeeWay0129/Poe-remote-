@@ -23,6 +23,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,7 +76,18 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
     var host by remember { mutableStateOf("100.x.x.x:7443") }
     var password by remember { mutableStateOf("") }
     var state by remember { mutableStateOf(ConnectionState.Disconnected) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     val streamConfig = remember { StreamConfig.default1080p60() }
+
+    DisposableEffect(remoteClient) {
+        remoteClient.onConnectionChanged = { nextState, message ->
+            state = nextState
+            errorMessage = message
+        }
+        onDispose {
+            remoteClient.onConnectionChanged = null
+        }
+    }
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
@@ -85,6 +97,7 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
                     onDisconnect = {
                         remoteClient.disconnect()
                         state = ConnectionState.Disconnected
+                        errorMessage = null
                     },
                     onInput = remoteClient::sendInput,
                 )
@@ -93,10 +106,12 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
                     host = host,
                     password = password,
                     state = state,
+                    errorMessage = errorMessage,
                     onHostChange = { host = it },
                     onPasswordChange = { password = it },
                     onConnect = {
                         state = ConnectionState.Connecting
+                        errorMessage = null
                         state = remoteClient.connect(host, password)
                     },
                 )
@@ -110,6 +125,7 @@ private fun ConnectScreen(
     host: String,
     password: String,
     state: ConnectionState,
+    errorMessage: String?,
     onHostChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onConnect: () -> Unit,
@@ -141,6 +157,11 @@ private fun ConnectScreen(
             onValueChange = onPasswordChange,
             label = { Text("配對密碼") },
             singleLine = true,
+        )
+        Text(
+            modifier = Modifier.padding(top = 12.dp),
+            text = state.statusText(errorMessage),
+            color = if (state == ConnectionState.Failed) Color(0xFFFFB4AB) else Color(0xFFB7C0CF),
         )
         Button(
             modifier = Modifier.padding(top = 20.dp),
@@ -196,6 +217,14 @@ private fun PlayerScreen(
         }
     }
 }
+
+private fun ConnectionState.statusText(errorMessage: String?): String =
+    when (this) {
+        ConnectionState.Disconnected -> "尚未連線"
+        ConnectionState.Connecting -> "正在連線到 host signaling..."
+        ConnectionState.Connected -> "已連線"
+        ConnectionState.Failed -> errorMessage ?: "連線失敗"
+    }
 
 private fun forwardPointerEvent(
     event: MotionEvent,

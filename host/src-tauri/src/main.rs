@@ -1,9 +1,9 @@
 use host_core::config::HostConfig;
-use host_core::pairing::{evaluate_pairing, PairingDecision, PairingRequest};
+use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
 use signaling_server::{
-    spawn_plain_ws_server, SharedHostConfig, SignalingBindConfig, SignalingRuntime,
-    SignalingServer,
+    RecordingInputInjector, SharedEventLog, SharedHostConfig, SignalingBindConfig,
+    SignalingEventLog, SignalingRuntime, SignalingServer, spawn_plain_ws_server,
 };
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,10 @@ struct HostStatus {
     signaling_running: bool,
     #[serde(rename = "signalingEndpoint")]
     signaling_endpoint: Option<String>,
+    #[serde(rename = "signalingEvents")]
+    signaling_events: Vec<String>,
+    #[serde(rename = "inputEvents")]
+    input_events: Vec<String>,
     #[serde(rename = "trustedDevices")]
     trusted_devices: usize,
     #[serde(rename = "streamLabel")]
@@ -45,6 +49,8 @@ struct TrustedDeviceDto {
 
 struct AppState {
     config: SharedHostConfig,
+    event_log: SharedEventLog,
+    input_injector: Arc<RecordingInputInjector>,
     streaming: Mutex<bool>,
     signaling: Mutex<Option<SignalingRuntime>>,
 }
@@ -54,6 +60,12 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
     let config = state.config.lock().expect("config lock poisoned");
     let streaming = *state.streaming.lock().expect("streaming lock poisoned");
     let signaling = state.signaling.lock().expect("signaling lock poisoned");
+    let signaling_events = state
+        .event_log
+        .lock()
+        .expect("event log lock poisoned")
+        .snapshot();
+    let input_events = state.input_injector.snapshot();
 
     HostStatus {
         streaming,
@@ -61,6 +73,8 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         signaling_endpoint: signaling
             .as_ref()
             .map(|runtime| format!("ws://{}/signaling", runtime.bind_addr())),
+        signaling_events,
+        input_events,
         trusted_devices: config.trusted_devices.len(),
         stream_label: format!(
             "{}x{}@{} {}kbps",
@@ -88,7 +102,11 @@ fn stop_streaming(state: tauri::State<'_, AppState>) {
 fn start_signaling(state: tauri::State<'_, AppState>) -> Result<HostStatus, String> {
     let mut signaling = state.signaling.lock().expect("signaling lock poisoned");
     if signaling.is_none() {
-        let server = SignalingServer::from_shared_state(Arc::clone(&state.config));
+        let server = SignalingServer::from_shared_parts_with_input(
+            Arc::clone(&state.config),
+            Arc::clone(&state.event_log),
+            state.input_injector.clone(),
+        );
         let runtime = spawn_plain_ws_server(
             server,
             SignalingBindConfig {
@@ -174,6 +192,8 @@ fn main() {
                 stream: StreamConfig::default(),
                 autostart: false,
             })),
+            event_log: Arc::new(Mutex::new(SignalingEventLog::new(64))),
+            input_injector: Arc::new(RecordingInputInjector::new(64)),
             streaming: Mutex::new(false),
             signaling: Mutex::new(None),
         })

@@ -7,6 +7,8 @@ type HostStatus = {
   streaming: boolean;
   signalingRunning: boolean;
   signalingEndpoint: string | null;
+  signalingEvents: string[];
+  inputEvents: string[];
   trustedDevices: number;
   streamLabel: string;
 };
@@ -26,6 +28,8 @@ function App() {
 
   useEffect(() => {
     refreshStatus();
+    const timer = window.setInterval(refreshStatus, 2000);
+    return () => window.clearInterval(timer);
   }, []);
 
   async function toggleStreaming() {
@@ -34,11 +38,19 @@ function App() {
   }
 
   async function toggleSignaling() {
-    const nextStatus = await invoke<HostStatus>(
-      status?.signalingRunning ? "stop_signaling" : "start_signaling",
-    );
-    setStatus(nextStatus);
+    try {
+      const nextStatus = await invoke<HostStatus>(
+        status?.signalingRunning ? "stop_signaling" : "start_signaling",
+      );
+      setStatus(nextStatus);
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    }
   }
+
+  const recentEvents = status?.signalingEvents.slice(-8).reverse() ?? [];
+  const recentInputEvents = status?.inputEvents.slice(-8).reverse() ?? [];
 
   return (
     <main>
@@ -73,6 +85,32 @@ function App() {
             {status?.streaming ? "停止串流" : "啟動串流"}
           </button>
         </div>
+      </section>
+
+      <section className="panel">
+        <h2>最近 Signaling 事件</h2>
+        {recentEvents.length === 0 ? (
+          <p className="muted">尚未收到 Android 訊息。</p>
+        ) : (
+          <ul className="event-list">
+            {recentEvents.map((event, index) => (
+              <li key={`${event}-${index}`}>{event}</li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>最近輸入事件</h2>
+        {recentInputEvents.length === 0 ? (
+          <p className="muted">尚未收到可注入的鍵鼠事件。</p>
+        ) : (
+          <ul className="event-list">
+            {recentInputEvents.map((event, index) => (
+              <li key={`${event}-${index}`}>{event}</li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="panel">

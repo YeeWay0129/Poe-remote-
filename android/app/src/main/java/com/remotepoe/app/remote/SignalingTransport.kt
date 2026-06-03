@@ -15,6 +15,7 @@ enum class TransportState {
 
 interface SignalingTransport {
     val state: TransportState
+    var onStateChanged: ((TransportState, String?) -> Unit)?
 
     fun connect(url: String, initialMessages: List<SignalingMessage>): TransportState
 
@@ -29,13 +30,15 @@ class RecordingSignalingTransport : SignalingTransport {
     override var state: TransportState = TransportState.Disconnected
         private set
 
+    override var onStateChanged: ((TransportState, String?) -> Unit)? = null
+
     override fun connect(url: String, initialMessages: List<SignalingMessage>): TransportState {
         if (url.isBlank()) {
-            state = TransportState.Failed
+            updateState(TransportState.Failed, "Signaling URL is blank.")
             return state
         }
 
-        state = TransportState.Connected
+        updateState(TransportState.Connected, null)
         initialMessages.forEach(::send)
         return state
     }
@@ -48,11 +51,16 @@ class RecordingSignalingTransport : SignalingTransport {
     }
 
     override fun close() {
-        state = TransportState.Disconnected
+        updateState(TransportState.Disconnected, null)
         sent.clear()
     }
 
     fun snapshotSentJson(): List<String> = sent.toList()
+
+    private fun updateState(nextState: TransportState, message: String?) {
+        state = nextState
+        onStateChanged?.invoke(nextState, message)
+    }
 }
 
 class OkHttpSignalingTransport(
@@ -64,31 +72,33 @@ class OkHttpSignalingTransport(
     override var state: TransportState = TransportState.Disconnected
         private set
 
+    override var onStateChanged: ((TransportState, String?) -> Unit)? = null
+
     override fun connect(url: String, initialMessages: List<SignalingMessage>): TransportState {
         if (url.isBlank()) {
-            state = TransportState.Failed
+            updateState(TransportState.Failed, "Signaling URL is blank.")
             return state
         }
 
         pendingMessages.clear()
         pendingMessages += initialMessages
-        state = TransportState.Connecting
+        updateState(TransportState.Connecting, null)
         socket = client.newWebSocket(
             Request.Builder().url(url).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    state = TransportState.Connected
+                    updateState(TransportState.Connected, null)
                     pendingMessages.forEach { webSocket.send(it.toJsonString()) }
                     pendingMessages.clear()
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    state = TransportState.Failed
+                    updateState(TransportState.Failed, t.message ?: "WebSocket connection failed.")
                     pendingMessages.clear()
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    state = TransportState.Disconnected
+                    updateState(TransportState.Disconnected, reason.ifBlank { null })
                     pendingMessages.clear()
                 }
             },
@@ -108,6 +118,11 @@ class OkHttpSignalingTransport(
         socket?.close(1000, "client disconnect")
         socket = null
         pendingMessages.clear()
-        state = TransportState.Disconnected
+        updateState(TransportState.Disconnected, null)
+    }
+
+    private fun updateState(nextState: TransportState, message: String?) {
+        state = nextState
+        onStateChanged?.invoke(nextState, message)
     }
 }

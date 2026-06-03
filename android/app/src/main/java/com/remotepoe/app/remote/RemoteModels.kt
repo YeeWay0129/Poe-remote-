@@ -7,6 +7,7 @@ enum class ConnectionState {
     Disconnected,
     Connecting,
     Connected,
+    Failed,
 }
 
 enum class PointerMode {
