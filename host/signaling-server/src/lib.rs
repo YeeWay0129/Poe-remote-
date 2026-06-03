@@ -29,6 +29,7 @@ pub struct SignalingEventLog {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputInjectionError {
     BackendUnavailable,
+    UnsafeForegroundWindow,
 }
 
 pub trait InputInjector: Send + Sync {
@@ -108,15 +109,73 @@ pub mod windows_input {
         MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL,
         MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    };
 
     const XBUTTON1_DATA: u32 = 1;
     const XBUTTON2_DATA: u32 = 2;
 
-    #[derive(Debug, Default)]
-    pub struct WindowsSendInputInjector;
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct WindowsForegroundWindowGate {
+        allowed_title_fragments: Vec<String>,
+    }
+
+    impl WindowsForegroundWindowGate {
+        pub fn poe_default() -> Self {
+            Self {
+                allowed_title_fragments: vec!["path of exile".to_string(), "poe".to_string()],
+            }
+        }
+
+        pub fn new(allowed_title_fragments: Vec<String>) -> Self {
+            Self {
+                allowed_title_fragments: allowed_title_fragments
+                    .into_iter()
+                    .map(|fragment| fragment.to_ascii_lowercase())
+                    .collect(),
+            }
+        }
+
+        pub fn allows_title(&self, title: &str) -> bool {
+            let title = title.to_ascii_lowercase();
+            self.allowed_title_fragments
+                .iter()
+                .any(|fragment| !fragment.is_empty() && title.contains(fragment))
+        }
+
+        fn allows_foreground_window(&self) -> bool {
+            foreground_window_title()
+                .as_deref()
+                .is_some_and(|title| self.allows_title(title))
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct WindowsSendInputInjector {
+        foreground_gate: WindowsForegroundWindowGate,
+    }
+
+    impl Default for WindowsSendInputInjector {
+        fn default() -> Self {
+            Self {
+                foreground_gate: WindowsForegroundWindowGate::poe_default(),
+            }
+        }
+    }
+
+    impl WindowsSendInputInjector {
+        pub fn new(foreground_gate: WindowsForegroundWindowGate) -> Self {
+            Self { foreground_gate }
+        }
+    }
 
     impl InputInjector for WindowsSendInputInjector {
         fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError> {
+            if !self.foreground_gate.allows_foreground_window() {
+                return Err(InputInjectionError::UnsafeForegroundWindow);
+            }
+
             let mut inputs = event_to_windows_inputs(event);
             if inputs.is_empty() {
                 return Ok(());
@@ -236,6 +295,26 @@ pub mod windows_input {
             MouseButton::Forward => XBUTTON2_DATA,
             _ => 0,
         }
+    }
+
+    fn foreground_window_title() -> Option<String> {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let len = unsafe { GetWindowTextLengthW(hwnd) };
+        if len <= 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; len as usize + 1];
+        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+        if copied <= 0 {
+            return None;
+        }
+
+        Some(String::from_utf16_lossy(&buffer[..copied as usize]))
     }
 }
 
@@ -900,6 +979,27 @@ mod tests {
             assert_eq!(inputs[0].Anonymous.mi.dwFlags, MOUSEEVENTF_WHEEL);
             assert_eq!(inputs[1].Anonymous.mi.dwFlags, MOUSEEVENTF_HWHEEL);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_foreground_gate_allows_poe_titles() {
+        let gate = crate::windows_input::WindowsForegroundWindowGate::poe_default();
+
+        assert!(gate.allows_title("Path of Exile"));
+        assert!(gate.allows_title("POE tools overlay"));
+        assert!(!gate.allows_title("Untitled - Notepad"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_foreground_gate_uses_custom_fragments() {
+        let gate = crate::windows_input::WindowsForegroundWindowGate::new(vec![
+            "Path of Exile 2".to_string(),
+        ]);
+
+        assert!(gate.allows_title("Path of Exile 2"));
+        assert!(!gate.allows_title("Path of Exile"));
     }
 
     #[test]

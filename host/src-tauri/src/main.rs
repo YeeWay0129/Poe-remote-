@@ -225,7 +225,7 @@ fn main() {
 #[cfg(windows)]
 fn build_input_injector(recording: Arc<RecordingInputInjector>) -> SharedInputInjector {
     Arc::new(CompositeInputInjector::new(vec![
-        Arc::new(WindowsSendInputInjector),
+        Arc::new(WindowsSendInputInjector::default()),
         recording,
     ]))
 }
@@ -237,7 +237,7 @@ fn build_input_injector(recording: Arc<RecordingInputInjector>) -> SharedInputIn
 
 #[cfg(windows)]
 fn input_backend_label() -> &'static str {
-    "Windows SendInput + recording"
+    "Windows SendInput gated to POE foreground + recording"
 }
 
 #[cfg(not(windows))]

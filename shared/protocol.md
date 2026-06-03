@@ -10,7 +10,7 @@ Android app 使用手動輸入 host 位址連線到 Windows host。位址可以�
 - VPN/LAN 內使用 plain WebSocket，外網暴露不列入支援範圍。
 - WSS/TLS 會在 host 安裝流程與憑證儲存完成後接上；不允許把 plain WebSocket 直接暴露到公開網路。
 - Host UI 會顯示最近 signaling 事件；Android UI 只有在 WebSocket `onOpen` 後才進入播放器畫面。
-- Host 會把有效的 `input_event` 送到 input injector。Windows host 使用 `SendInput + recording`，UI 仍顯示最近輸入事件供除錯；非 Windows build 只使用 recording backend。
+- Host 會把有效的 `input_event` 送到 input injector。Windows host 使用 `SendInput + recording`，但 `SendInput` 只會在前景視窗標題符合 POE 規則時執行；非 Windows build 只使用 recording backend。
 
 ## 配對
 
