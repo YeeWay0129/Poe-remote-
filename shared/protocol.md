@@ -26,6 +26,52 @@ WebSocket/WSS signaling 訊息以 `type` 欄位區分：
 - `input_event`: 鍵盤滑鼠事件。
 - `error`: 可恢復或不可恢復錯誤。
 
+所有訊息都必須包含：
+
+```json
+{
+  "type": "auth",
+  "requestId": "uuid-or-client-request-id",
+  "payload": {}
+}
+```
+
+`type` 必須和 `payload` 形狀一致。Host 收到訊息後要先檢查 `requestId` 不為空，再依 `type` 驗證 payload。
+
+### Auth payload
+
+```json
+{
+  "deviceId": "android-dev-id",
+  "deviceName": "Android tablet",
+  "publicKey": "device-public-key",
+  "passwordHash": "sha256-password"
+}
+```
+
+### Stream config payload
+
+```json
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 60,
+  "bitrateKbps": 12000,
+  "codec": "h264",
+  "displayId": null
+}
+```
+
+### Input event payload
+
+```json
+{
+  "kind": "keyboard",
+  "keyCode": 87,
+  "action": "down"
+}
+```
+
 ## 串流預設
 
 - 預設：1920x1080、60 FPS、H.264。

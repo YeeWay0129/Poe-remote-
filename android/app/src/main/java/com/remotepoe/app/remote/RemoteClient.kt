@@ -1,25 +1,24 @@
 package com.remotepoe.app.remote
 
 class RemoteClient {
-    private val sentEvents = mutableListOf<RemoteInputEvent>()
+    private var signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
 
     fun connect(host: String, password: String): ConnectionState {
         if (host.isBlank() || password.isBlank()) {
             return ConnectionState.Disconnected
         }
 
+        signalingSession.start(password)
         return ConnectionState.Connected
     }
 
     fun disconnect() {
-        sentEvents.clear()
+        signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
     }
 
     fun sendInput(event: RemoteInputEvent) {
-        if (event.isSingleUserAction()) {
-            sentEvents += event
-        }
+        signalingSession.sendInput(event)
     }
 
-    fun snapshotSentEvents(): List<RemoteInputEvent> = sentEvents.toList()
+    fun snapshotSignalingOutbox(): List<SignalingMessage> = signalingSession.snapshotOutbox()
 }

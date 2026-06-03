@@ -14,7 +14,91 @@
       "minLength": 1
     },
     "payload": {
-      "type": "object"
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["deviceId", "deviceName", "publicKey", "passwordHash"],
+          "properties": {
+            "deviceId": { "type": "string", "minLength": 1 },
+            "deviceName": { "type": "string" },
+            "publicKey": { "type": "string", "minLength": 1 },
+            "passwordHash": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["deviceId", "deviceName", "appVersion", "supportsExternalKeyboard", "supportsExternalMouse"],
+          "properties": {
+            "deviceId": { "type": "string", "minLength": 1 },
+            "deviceName": { "type": "string" },
+            "appVersion": { "type": "string" },
+            "supportsExternalKeyboard": { "type": "boolean" },
+            "supportsExternalMouse": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["width", "height", "fps", "bitrateKbps", "codec"],
+          "properties": {
+            "width": { "type": "integer", "enum": [1280, 1920] },
+            "height": { "type": "integer", "enum": [720, 1080] },
+            "fps": { "type": "integer", "minimum": 1, "maximum": 60 },
+            "bitrateKbps": { "type": "integer", "minimum": 1 },
+            "codec": { "type": "string", "enum": ["h264"] },
+            "displayId": { "type": ["string", "null"] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["sdp"],
+          "properties": {
+            "sdp": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["candidate"],
+          "properties": {
+            "candidate": { "type": "string", "minLength": 1 },
+            "sdpMid": { "type": ["string", "null"] },
+            "sdpMLineIndex": { "type": ["integer", "null"] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["keyboard", "mouse_move", "mouse_button", "mouse_wheel", "pointer_mode_changed"]
+            },
+            "keyCode": { "type": "integer" },
+            "action": { "type": "string" },
+            "dx": { "type": "integer" },
+            "dy": { "type": "integer" },
+            "mode": { "type": "string", "enum": ["relative", "absolute"] },
+            "button": { "type": "string" },
+            "deltaX": { "type": "integer" },
+            "deltaY": { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["code", "message", "recoverable"],
+          "properties": {
+            "code": { "type": "string", "minLength": 1 },
+            "message": { "type": "string" },
+            "recoverable": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "additionalProperties": false
