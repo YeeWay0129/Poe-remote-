@@ -5,7 +5,8 @@ use host_core::input::{
 };
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing, is_trusted_device};
 use host_core::signaling::{
-    AuthPayload, ErrorPayload, SignalingMessage, SignalingPayload, SignalingType,
+    AuthPayload, ErrorPayload, IceCandidatePayload, SessionDescriptionPayload, SignalingMessage,
+    SignalingPayload, SignalingType,
 };
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -20,6 +21,97 @@ pub type SharedHostConfig = Arc<Mutex<HostConfig>>;
 pub type SharedEventLog = Arc<Mutex<SignalingEventLog>>;
 pub type SharedInputInjector = Arc<dyn InputInjector>;
 pub type SharedPeerSignalingState = Arc<Mutex<PeerSignalingState>>;
+pub type SharedWebRtcPeerGateway = Arc<dyn WebRtcPeerGateway>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebRtcPeerResponse {
+    pub answer_sdp: String,
+    pub ice_candidates: Vec<IceCandidatePayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebRtcPeerError {
+    InvalidOffer,
+    BackendUnavailable,
+}
+
+pub trait WebRtcPeerGateway: Send + Sync {
+    fn accept_offer(&self, offer_sdp: &str) -> Result<WebRtcPeerResponse, WebRtcPeerError>;
+
+    fn add_remote_ice(&self, candidate: &IceCandidatePayload) -> Result<(), WebRtcPeerError>;
+}
+
+#[derive(Debug)]
+pub struct RecordingWebRtcPeerGateway {
+    accepted_offers: Mutex<Vec<String>>,
+    remote_ice: Mutex<Vec<IceCandidatePayload>>,
+}
+
+impl RecordingWebRtcPeerGateway {
+    pub fn new() -> Self {
+        Self {
+            accepted_offers: Mutex::new(Vec::new()),
+            remote_ice: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn snapshot_accepted_offers(&self) -> Vec<String> {
+        self.accepted_offers
+            .lock()
+            .map(|offers| offers.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn snapshot_remote_ice(&self) -> Vec<IceCandidatePayload> {
+        self.remote_ice
+            .lock()
+            .map(|candidates| candidates.clone())
+            .unwrap_or_default()
+    }
+}
+
+impl Default for RecordingWebRtcPeerGateway {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WebRtcPeerGateway for RecordingWebRtcPeerGateway {
+    fn accept_offer(&self, offer_sdp: &str) -> Result<WebRtcPeerResponse, WebRtcPeerError> {
+        if offer_sdp.trim().is_empty() {
+            return Err(WebRtcPeerError::InvalidOffer);
+        }
+
+        self.accepted_offers
+            .lock()
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)?
+            .push(offer_sdp.to_string());
+
+        Ok(WebRtcPeerResponse {
+            answer_sdp: format!(
+                "v=0\r\nremote-poe-host-answer\r\noffer-bytes={}",
+                offer_sdp.len()
+            ),
+            ice_candidates: vec![IceCandidatePayload {
+                candidate: "candidate:remote-poe-host 1 UDP 1 0.0.0.0 9 typ host".to_string(),
+                sdp_mid: Some("0".to_string()),
+                sdp_m_line_index: Some(0),
+            }],
+        })
+    }
+
+    fn add_remote_ice(&self, candidate: &IceCandidatePayload) -> Result<(), WebRtcPeerError> {
+        if candidate.candidate.trim().is_empty() {
+            return Err(WebRtcPeerError::InvalidOffer);
+        }
+
+        self.remote_ice
+            .lock()
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)?
+            .push(candidate.clone());
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PeerSignalingPhase {
@@ -431,6 +523,10 @@ pub enum ServerEvent {
 pub enum FrameResult {
     Accepted(ServerEvent),
     Reply(SignalingMessage),
+    AcceptedWithReplies {
+        event: ServerEvent,
+        replies: Vec<SignalingMessage>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -440,6 +536,7 @@ pub enum SignalingFrameError {
     Unauthorized,
     InvalidInput,
     InputInjectionFailed,
+    WebRtcPeerFailed,
     UnsupportedMessage,
     StatePoisoned,
 }
@@ -450,6 +547,7 @@ pub struct SignalingServer {
     event_log: SharedEventLog,
     input_injector: SharedInputInjector,
     peer_state: SharedPeerSignalingState,
+    peer_gateway: SharedWebRtcPeerGateway,
 }
 
 impl SignalingServer {
@@ -491,11 +589,28 @@ impl SignalingServer {
         input_injector: SharedInputInjector,
         peer_state: SharedPeerSignalingState,
     ) -> Self {
+        Self::from_shared_parts_with_input_peer_state_and_gateway(
+            state,
+            event_log,
+            input_injector,
+            peer_state,
+            Arc::new(RecordingWebRtcPeerGateway::new()),
+        )
+    }
+
+    pub fn from_shared_parts_with_input_peer_state_and_gateway(
+        state: SharedHostConfig,
+        event_log: SharedEventLog,
+        input_injector: SharedInputInjector,
+        peer_state: SharedPeerSignalingState,
+        peer_gateway: SharedWebRtcPeerGateway,
+    ) -> Self {
         Self {
             state,
             event_log,
             input_injector,
             peer_state,
+            peer_gateway,
         }
     }
 
@@ -576,15 +691,21 @@ impl SignalingServer {
                     .lock()
                     .map_err(|_| SignalingFrameError::StatePoisoned)?
                     .record_session_description(message.message_type, &payload.sdp);
-                Ok(FrameResult::Accepted(
-                    ServerEvent::SessionDescriptionReceived(message.message_type),
-                ))
+                match message.message_type {
+                    SignalingType::Offer => self.handle_offer(message.request_id, payload),
+                    _ => Ok(FrameResult::Accepted(
+                        ServerEvent::SessionDescriptionReceived(message.message_type),
+                    )),
+                }
             }
             SignalingPayload::Ice(payload) => {
                 self.peer_state
                     .lock()
                     .map_err(|_| SignalingFrameError::StatePoisoned)?
-                    .record_ice_candidate(&payload.candidate, payload.sdp_mid);
+                    .record_ice_candidate(&payload.candidate, payload.sdp_mid.clone());
+                self.peer_gateway
+                    .add_remote_ice(&payload)
+                    .map_err(|_| SignalingFrameError::WebRtcPeerFailed)?;
                 Ok(FrameResult::Accepted(ServerEvent::IceCandidateReceived))
             }
             SignalingPayload::Error(_) => Err(SignalingFrameError::UnsupportedMessage),
@@ -594,6 +715,9 @@ impl SignalingServer {
     fn record_frame_result(&self, result: &Result<FrameResult, SignalingFrameError>) {
         let record = match result {
             Ok(FrameResult::Accepted(event)) => format!("accepted: {}", event.summary()),
+            Ok(FrameResult::AcceptedWithReplies { event, replies }) => {
+                format!("accepted: {} replies={}", event.summary(), replies.len())
+            }
             Ok(FrameResult::Reply(reply)) => {
                 format!(
                     "reply: {} for {}",
@@ -654,6 +778,35 @@ impl SignalingServer {
                 false,
             ))),
         }
+    }
+
+    fn handle_offer(
+        &self,
+        request_id: String,
+        payload: SessionDescriptionPayload,
+    ) -> Result<FrameResult, SignalingFrameError> {
+        let response = self
+            .peer_gateway
+            .accept_offer(&payload.sdp)
+            .map_err(|_| SignalingFrameError::WebRtcPeerFailed)?;
+        let event = ServerEvent::SessionDescriptionReceived(SignalingType::Offer);
+        let mut replies = vec![SignalingMessage {
+            message_type: SignalingType::Answer,
+            request_id: format!("{request_id}:answer"),
+            payload: SignalingPayload::SessionDescription(SessionDescriptionPayload {
+                sdp: response.answer_sdp,
+            }),
+        }];
+
+        replies.extend(response.ice_candidates.into_iter().enumerate().map(
+            |(index, candidate)| SignalingMessage {
+                message_type: SignalingType::Ice,
+                request_id: format!("{request_id}:host-ice-{index}"),
+                payload: SignalingPayload::Ice(candidate),
+            },
+        ));
+
+        Ok(FrameResult::AcceptedWithReplies { event, replies })
     }
 }
 
@@ -846,15 +999,25 @@ async fn handle_connection(
     while let Some(message) = socket.next().await {
         let message = message?;
         if let Message::Text(text) = message {
-            if let Ok(FrameResult::Reply(reply)) = server.handle_text_frame(&text) {
-                socket
-                    .send(Message::Text(serde_json::to_string(&reply)?.into()))
-                    .await?;
+            if let Ok(result) = server.handle_text_frame(&text) {
+                for reply in frame_result_replies(result) {
+                    socket
+                        .send(Message::Text(serde_json::to_string(&reply)?.into()))
+                        .await?;
+                }
             }
         }
     }
 
     Ok(())
+}
+
+fn frame_result_replies(result: FrameResult) -> Vec<SignalingMessage> {
+    match result {
+        FrameResult::Reply(reply) => vec![reply],
+        FrameResult::AcceptedWithReplies { replies, .. } => replies,
+        FrameResult::Accepted(_) => Vec::new(),
+    }
 }
 
 fn error_reply(
@@ -992,7 +1155,14 @@ mod tests {
 
     #[test]
     fn offer_frame_updates_peer_signaling_state() {
-        let server = SignalingServer::new(HostConfig::new("hash"));
+        let peer_gateway = Arc::new(RecordingWebRtcPeerGateway::new());
+        let server = SignalingServer::from_shared_parts_with_input_peer_state_and_gateway(
+            Arc::new(Mutex::new(HostConfig::new("hash"))),
+            Arc::new(Mutex::new(SignalingEventLog::new(8))),
+            Arc::new(RecordingInputInjector::new(8)),
+            Arc::new(Mutex::new(PeerSignalingState::default())),
+            peer_gateway.clone(),
+        );
         let sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1";
         let message = SignalingMessage {
             message_type: SignalingType::Offer,
@@ -1005,17 +1175,27 @@ mod tests {
         };
         let json = serde_json::to_string(&message).expect("message serializes");
 
+        let result = server.handle_text_frame(&json).expect("frame accepted");
+
+        let FrameResult::AcceptedWithReplies { event, replies } = result else {
+            panic!("offer should generate answer and ICE replies");
+        };
         assert_eq!(
-            server.handle_text_frame(&json),
-            Ok(FrameResult::Accepted(
-                ServerEvent::SessionDescriptionReceived(SignalingType::Offer)
-            ))
+            event,
+            ServerEvent::SessionDescriptionReceived(SignalingType::Offer)
         );
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0].message_type, SignalingType::Answer);
+        assert_eq!(replies[1].message_type, SignalingType::Ice);
 
         let peer_state = server.snapshot_peer_state().unwrap();
         assert_eq!(peer_state.phase, PeerSignalingPhase::OfferReceived);
         assert_eq!(peer_state.last_offer_sdp_bytes, Some(sdp.len()));
         assert_eq!(peer_state.last_answer_sdp_bytes, None);
+        assert_eq!(
+            peer_gateway.snapshot_accepted_offers(),
+            vec![sdp.to_string()]
+        );
     }
 
     #[test]
@@ -1042,7 +1222,14 @@ mod tests {
 
     #[test]
     fn ice_frame_updates_peer_signaling_state() {
-        let server = SignalingServer::new(HostConfig::new("hash"));
+        let peer_gateway = Arc::new(RecordingWebRtcPeerGateway::new());
+        let server = SignalingServer::from_shared_parts_with_input_peer_state_and_gateway(
+            Arc::new(Mutex::new(HostConfig::new("hash"))),
+            Arc::new(Mutex::new(SignalingEventLog::new(8))),
+            Arc::new(RecordingInputInjector::new(8)),
+            Arc::new(Mutex::new(PeerSignalingState::default())),
+            peer_gateway.clone(),
+        );
         let candidate = "candidate:1 1 UDP 1 192.0.2.1 12345 typ host";
         let message = SignalingMessage {
             message_type: SignalingType::Ice,
@@ -1065,6 +1252,40 @@ mod tests {
         assert_eq!(peer_state.received_ice_candidates, 1);
         assert_eq!(peer_state.last_ice_candidate_bytes, Some(candidate.len()));
         assert_eq!(peer_state.last_ice_sdp_mid, Some("0".to_string()));
+        assert_eq!(peer_gateway.snapshot_remote_ice().len(), 1);
+        assert_eq!(
+            peer_gateway.snapshot_remote_ice()[0].candidate,
+            candidate.to_string()
+        );
+    }
+
+    #[test]
+    fn frame_result_replies_extracts_generated_answer_and_ice() {
+        let replies = frame_result_replies(FrameResult::AcceptedWithReplies {
+            event: ServerEvent::SessionDescriptionReceived(SignalingType::Offer),
+            replies: vec![
+                SignalingMessage {
+                    message_type: SignalingType::Answer,
+                    request_id: "answer".to_string(),
+                    payload: SignalingPayload::SessionDescription(SessionDescriptionPayload {
+                        sdp: "v=0".to_string(),
+                    }),
+                },
+                SignalingMessage {
+                    message_type: SignalingType::Ice,
+                    request_id: "ice".to_string(),
+                    payload: SignalingPayload::Ice(IceCandidatePayload {
+                        candidate: "candidate:host".to_string(),
+                        sdp_mid: Some("0".to_string()),
+                        sdp_m_line_index: Some(0),
+                    }),
+                },
+            ],
+        });
+
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0].message_type, SignalingType::Answer);
+        assert_eq!(replies[1].message_type, SignalingType::Ice);
     }
 
     #[test]

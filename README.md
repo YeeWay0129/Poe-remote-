@@ -27,6 +27,7 @@ shared/           協定與驗收文件
 - `host/host-core` 已有配對、信任裝置、stream config、input event 與 signaling model。
 - `host/signaling-server` 已可處理 `auth`、`device_info`、`stream_config`、`input_event`、`offer`、`answer`、`ice`。
 - Host 已提供 WebSocket signaling server，並在 UI 顯示最近事件、輸入記錄與 WebRTC offer/answer/ice 狀態。
+- Host 收到 Android WebRTC offer 後，會透過可替換的 peer gateway skeleton 回傳 answer 與 host ICE；目前是 recording/stub backend，尚未接實際 media track。
 - Windows build 已接 `SendInput + recording` backend，且 `SendInput` 只在前景視窗標題符合 POE 時執行；非 Windows build 使用 recording backend。
 - Android app 已有連線頁、WebSocket transport、基礎沉浸式畫面、外接鍵鼠 mapping、input event 傳送，以及 WebRTC peer connection skeleton。
 - Android WebSocket 連上後會建立本地 peer connection、產生 offer、送出本地 ICE，並可套用 host 回傳的 answer/ICE。
