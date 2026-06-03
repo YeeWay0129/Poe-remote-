@@ -74,6 +74,31 @@ public class RemoteClientTest {
     }
 
     @Test
+    public void connectSendsSelectedStreamConfig() {
+        RecordingSignalingTransport transport = new RecordingSignalingTransport();
+        FakePeerConnectionGateway peer = new FakePeerConnectionGateway();
+        RemoteClient client = new RemoteClient(
+            transport,
+            peer,
+            action -> {
+                action.invoke();
+                return Unit.INSTANCE;
+            }
+        );
+
+        client.connect("127.0.0.1:7443", "secret", StreamConfig.Companion.fallback720p60());
+
+        assertTrue(
+            transport.snapshotSentJson().stream().anyMatch(
+                json -> json.contains("\"type\":\"stream_config\"")
+                    && json.contains("\"width\":1280")
+                    && json.contains("\"height\":720")
+                    && json.contains("\"bitrateKbps\":6000")
+            )
+        );
+    }
+
+    @Test
     public void inputUsesDataChannelWhenControlChannelAcceptsMessage() {
         RecordingSignalingTransport transport = new RecordingSignalingTransport();
         FakePeerConnectionGateway peer = new FakePeerConnectionGateway();

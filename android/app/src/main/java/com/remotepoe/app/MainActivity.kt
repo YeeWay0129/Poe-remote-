@@ -87,7 +87,7 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
     var state by remember { mutableStateOf(ConnectionState.Disconnected) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var remoteVideoTrack by remember { mutableStateOf<VideoTrack?>(null) }
-    val streamConfig = remember { StreamConfig.default1080p60() }
+    var streamConfig by remember { mutableStateOf(StreamConfig.default1080p60()) }
 
     DisposableEffect(remoteClient) {
         remoteClient.onConnectionChanged = { nextState, message ->
@@ -121,14 +121,16 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
                 ConnectScreen(
                     host = host,
                     password = password,
+                    streamConfig = streamConfig,
                     state = state,
                     errorMessage = errorMessage,
                     onHostChange = { host = it },
                     onPasswordChange = { password = it },
+                    onStreamConfigChange = { streamConfig = it },
                     onConnect = {
                         state = ConnectionState.Connecting
                         errorMessage = null
-                        state = remoteClient.connect(host, password)
+                        state = remoteClient.connect(host, password, streamConfig)
                     },
                 )
             }
@@ -140,10 +142,12 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
 private fun ConnectScreen(
     host: String,
     password: String,
+    streamConfig: StreamConfig,
     state: ConnectionState,
     errorMessage: String?,
     onHostChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onStreamConfigChange: (StreamConfig) -> Unit,
     onConnect: () -> Unit,
 ) {
     Column(
@@ -173,6 +177,22 @@ private fun ConnectScreen(
             onValueChange = onPasswordChange,
             label = { Text("配對密碼") },
             singleLine = true,
+        )
+        Row(
+            modifier = Modifier.padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = { onStreamConfigChange(StreamConfig.default1080p60()) }) {
+                Text("1080p60")
+            }
+            Button(onClick = { onStreamConfigChange(StreamConfig.fallback720p60()) }) {
+                Text("720p60")
+            }
+        }
+        Text(
+            modifier = Modifier.padding(top = 8.dp),
+            text = "${streamConfig.width}x${streamConfig.height}@${streamConfig.fps} ${streamConfig.bitrateKbps}kbps",
+            color = Color(0xFFB7C0CF),
         )
         Text(
             modifier = Modifier.padding(top = 12.dp),

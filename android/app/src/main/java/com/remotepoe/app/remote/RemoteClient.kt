@@ -48,12 +48,18 @@ class RemoteClient @JvmOverloads constructor(
         }
     }
 
-    fun connect(host: String, password: String): ConnectionState {
+    @JvmOverloads
+    fun connect(
+        host: String,
+        password: String,
+        streamConfig: StreamConfig = StreamConfig.default1080p60(),
+    ): ConnectionState {
         if (host.isBlank() || password.isBlank()) {
             return ConnectionState.Failed
         }
 
         offerStarted = false
+        signalingSession = SignalingSession(DeviceIdentity.developmentDefault(), streamConfig)
         val url = host.toSignalingUrl()
         val initialMessages = signalingSession.start(password)
         return transport.connect(url, initialMessages).toConnectionState()
