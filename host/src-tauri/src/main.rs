@@ -431,7 +431,6 @@ fn main() {
     let recording_input_injector = Arc::new(RecordingInputInjector::new(64));
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
-    let peer_gateway = build_peer_gateway();
     let media_pipeline = Arc::new(Mutex::new(build_media_pipeline()));
     let config_path = host_config_path();
     let config =
@@ -441,12 +440,20 @@ fn main() {
             stream: StreamConfig::default(),
             autostart: false,
         });
+    let config = Arc::new(Mutex::new(config));
+    let event_log = Arc::new(Mutex::new(SignalingEventLog::new(64)));
+    let peer_gateway = build_peer_gateway(
+        Arc::clone(&config),
+        Arc::clone(&event_log),
+        Arc::clone(&input_injector),
+        Arc::clone(&peer_state),
+    );
 
     tauri::Builder::default()
         .manage(AppState {
             config_path,
-            config: Arc::new(Mutex::new(config)),
-            event_log: Arc::new(Mutex::new(SignalingEventLog::new(64))),
+            config,
+            event_log,
             recording_input_injector,
             input_injector,
             peer_state,
@@ -495,12 +502,34 @@ fn input_backend_label() -> &'static str {
 }
 
 #[cfg(feature = "real-webrtc")]
-fn build_peer_gateway() -> SharedWebRtcPeerGateway {
-    Arc::new(RealWebRtcPeerGateway::new().expect("failed to initialize WebRTC peer gateway"))
+fn build_peer_gateway(
+    config: SharedHostConfig,
+    event_log: SharedEventLog,
+    input_injector: SharedInputInjector,
+    peer_state: SharedPeerSignalingState,
+) -> SharedWebRtcPeerGateway {
+    let control_server = SignalingServer::from_shared_parts_with_input_peer_state_and_gateway(
+        config,
+        event_log,
+        input_injector,
+        peer_state,
+        Arc::new(signaling_server::RecordingWebRtcPeerGateway::new()),
+    );
+    Arc::new(
+        RealWebRtcPeerGateway::new_with_control_handler(Some(Arc::new(move |text| {
+            let _ = control_server.handle_control_message(&text);
+        })))
+        .expect("failed to initialize WebRTC peer gateway"),
+    )
 }
 
 #[cfg(not(feature = "real-webrtc"))]
-fn build_peer_gateway() -> SharedWebRtcPeerGateway {
+fn build_peer_gateway(
+    _config: SharedHostConfig,
+    _event_log: SharedEventLog,
+    _input_injector: SharedInputInjector,
+    _peer_state: SharedPeerSignalingState,
+) -> SharedWebRtcPeerGateway {
     Arc::new(signaling_server::RecordingWebRtcPeerGateway::new())
 }
 

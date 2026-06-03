@@ -15,14 +15,23 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
+pub type ControlMessageHandler = Arc<dyn Fn(String) + Send + Sync>;
+
 pub struct RealWebRtcPeerGateway {
     runtime: Runtime,
     peer_connection: Mutex<Option<Arc<RTCPeerConnection>>>,
     media_track: Mutex<Option<Arc<TrackLocalStaticSample>>>,
+    control_message_handler: Option<ControlMessageHandler>,
 }
 
 impl RealWebRtcPeerGateway {
     pub fn new() -> Result<Self, WebRtcPeerError> {
+        Self::new_with_control_handler(None)
+    }
+
+    pub fn new_with_control_handler(
+        control_message_handler: Option<ControlMessageHandler>,
+    ) -> Result<Self, WebRtcPeerError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -32,11 +41,13 @@ impl RealWebRtcPeerGateway {
             runtime,
             peer_connection: Mutex::new(None),
             media_track: Mutex::new(None),
+            control_message_handler,
         })
     }
 
-    async fn build_peer_connection()
-    -> Result<(Arc<RTCPeerConnection>, Arc<TrackLocalStaticSample>), WebRtcPeerError> {
+    async fn build_peer_connection(
+        control_message_handler: Option<ControlMessageHandler>,
+    ) -> Result<(Arc<RTCPeerConnection>, Arc<TrackLocalStaticSample>), WebRtcPeerError> {
         let api = APIBuilder::new().build();
         let peer_connection = Arc::new(
             api.new_peer_connection(RTCConfiguration::default())
@@ -57,11 +68,17 @@ impl RealWebRtcPeerGateway {
             .map_err(|_| WebRtcPeerError::BackendUnavailable)?;
 
         peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
+            let control_message_handler = control_message_handler.clone();
             Box::pin(async move {
                 data_channel.on_message(Box::new(move |_message| {
+                    let control_message_handler = control_message_handler.clone();
                     Box::pin(async move {
-                        // Input injection is wired through the signaling server today.
-                        // This callback reserves the control data channel path for the next stage.
+                        let Some(handler) = control_message_handler else {
+                            return;
+                        };
+                        if let Ok(text) = String::from_utf8(_message.data.to_vec()) {
+                            handler(text);
+                        }
                     })
                 }));
             })
@@ -104,7 +121,9 @@ impl WebRtcPeerGateway for RealWebRtcPeerGateway {
             return Err(WebRtcPeerError::InvalidOffer);
         }
 
-        let (peer_connection, media_track) = self.runtime.block_on(Self::build_peer_connection())?;
+        let (peer_connection, media_track) = self.runtime.block_on(Self::build_peer_connection(
+            self.control_message_handler.clone(),
+        ))?;
         let response = self.runtime.block_on(Self::accept_offer_async(
             peer_connection.clone(),
             offer_sdp.to_string(),
