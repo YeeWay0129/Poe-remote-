@@ -39,12 +39,17 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.remotepoe.app.remote.AndroidWebRtcPeerConnectionGateway
 import com.remotepoe.app.remote.ConnectionState
 import com.remotepoe.app.remote.PointerMode
 import com.remotepoe.app.remote.RemoteClient
 import com.remotepoe.app.remote.RemoteInputEvent
 import com.remotepoe.app.remote.StreamConfig
+import org.webrtc.EglBase
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoTrack
 
 class MainActivity : ComponentActivity() {
     private lateinit var remoteClient: RemoteClient
@@ -81,6 +86,7 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
     var password by remember { mutableStateOf("") }
     var state by remember { mutableStateOf(ConnectionState.Disconnected) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var remoteVideoTrack by remember { mutableStateOf<VideoTrack?>(null) }
     val streamConfig = remember { StreamConfig.default1080p60() }
 
     DisposableEffect(remoteClient) {
@@ -88,8 +94,12 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
             state = nextState
             errorMessage = message
         }
+        remoteClient.onRemoteVideoTrack = { track ->
+            remoteVideoTrack = track
+        }
         onDispose {
             remoteClient.onConnectionChanged = null
+            remoteClient.onRemoteVideoTrack = null
         }
     }
 
@@ -98,10 +108,12 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
             if (state == ConnectionState.Connected) {
                 PlayerScreen(
                     streamConfig = streamConfig,
+                    remoteVideoTrack = remoteVideoTrack,
                     onDisconnect = {
                         remoteClient.disconnect()
                         state = ConnectionState.Disconnected
                         errorMessage = null
+                        remoteVideoTrack = null
                     },
                     onInput = remoteClient::sendInput,
                 )
@@ -181,6 +193,7 @@ private fun ConnectScreen(
 @OptIn(ExperimentalComposeUiApi::class)
 private fun PlayerScreen(
     streamConfig: StreamConfig,
+    remoteVideoTrack: VideoTrack?,
     onDisconnect: () -> Unit,
     onInput: (RemoteInputEvent) -> Unit,
 ) {
@@ -203,11 +216,7 @@ private fun PlayerScreen(
                 true
             },
     ) {
-        Text(
-            modifier = Modifier.align(Alignment.Center),
-            text = "${streamConfig.width}x${streamConfig.height}@${streamConfig.fps} WebRTC 畫面",
-            color = Color(0xFFB7C0CF),
-        )
+        RemoteVideoSurface(remoteVideoTrack = remoteVideoTrack)
 
         Row(
             modifier = Modifier
@@ -218,6 +227,47 @@ private fun PlayerScreen(
             Button(onClick = onDisconnect) {
                 Text("中斷")
             }
+        }
+    }
+}
+
+@Composable
+private fun RemoteVideoSurface(remoteVideoTrack: VideoTrack?) {
+    val eglBase = remember { EglBase.create() }
+    var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            SurfaceViewRenderer(context).apply {
+                init(eglBase.eglBaseContext, null)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                setEnableHardwareScaler(true)
+                renderer = this
+            }
+        },
+        update = { view ->
+            renderer = view
+        },
+    )
+
+    DisposableEffect(remoteVideoTrack, renderer) {
+        val activeRenderer = renderer
+        if (activeRenderer != null && remoteVideoTrack != null) {
+            remoteVideoTrack.addSink(activeRenderer)
+        }
+
+        onDispose {
+            if (activeRenderer != null && remoteVideoTrack != null) {
+                remoteVideoTrack.removeSink(activeRenderer)
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            renderer?.release()
+            eglBase.release()
         }
     }
 }

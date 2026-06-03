@@ -2,6 +2,7 @@ package com.remotepoe.app.remote
 
 import android.os.Handler
 import android.os.Looper
+import org.webrtc.VideoTrack
 
 class RemoteClient @JvmOverloads constructor(
     private val transport: SignalingTransport = OkHttpSignalingTransport(),
@@ -13,6 +14,7 @@ class RemoteClient @JvmOverloads constructor(
     private var offerStarted = false
 
     var onConnectionChanged: ((ConnectionState, String?) -> Unit)? = null
+    var onRemoteVideoTrack: ((VideoTrack) -> Unit)? = null
 
     init {
         transport.onStateChanged = { transportState, message ->
@@ -37,6 +39,11 @@ class RemoteClient @JvmOverloads constructor(
         peerConnection.onError = { message ->
             dispatch {
                 onConnectionChanged?.invoke(ConnectionState.Failed, message)
+            }
+        }
+        peerConnection.onRemoteVideoTrack = { track ->
+            dispatch {
+                onRemoteVideoTrack?.invoke(track)
             }
         }
     }

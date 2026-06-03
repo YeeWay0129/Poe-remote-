@@ -133,6 +133,7 @@ public class RemoteClientTest {
 
         private kotlin.jvm.functions.Function1<? super String, Unit> onLocalOffer = null;
         private kotlin.jvm.functions.Function1<? super RemoteIceCandidate, Unit> onLocalIceCandidate = null;
+        private kotlin.jvm.functions.Function1<? super org.webrtc.VideoTrack, Unit> onRemoteVideoTrack = null;
         private kotlin.jvm.functions.Function1<? super String, Unit> onError = null;
 
         @Override
@@ -155,6 +156,18 @@ public class RemoteClientTest {
             kotlin.jvm.functions.Function1<? super RemoteIceCandidate, Unit> callback
         ) {
             onLocalIceCandidate = callback;
+        }
+
+        @Override
+        public kotlin.jvm.functions.Function1<org.webrtc.VideoTrack, Unit> getOnRemoteVideoTrack() {
+            return (kotlin.jvm.functions.Function1<org.webrtc.VideoTrack, Unit>) onRemoteVideoTrack;
+        }
+
+        @Override
+        public void setOnRemoteVideoTrack(
+            kotlin.jvm.functions.Function1<? super org.webrtc.VideoTrack, Unit> callback
+        ) {
+            onRemoteVideoTrack = callback;
         }
 
         @Override

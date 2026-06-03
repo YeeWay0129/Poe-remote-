@@ -10,6 +10,7 @@ import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.VideoTrack
 
 data class RemoteIceCandidate(
     val candidate: String,
@@ -20,6 +21,7 @@ data class RemoteIceCandidate(
 interface PeerConnectionGateway {
     var onLocalOffer: ((String) -> Unit)?
     var onLocalIceCandidate: ((RemoteIceCandidate) -> Unit)?
+    var onRemoteVideoTrack: ((VideoTrack) -> Unit)?
     var onError: ((String) -> Unit)?
 
     fun start()
@@ -33,6 +35,7 @@ interface PeerConnectionGateway {
 class NoopPeerConnectionGateway : PeerConnectionGateway {
     override var onLocalOffer: ((String) -> Unit)? = null
     override var onLocalIceCandidate: ((RemoteIceCandidate) -> Unit)? = null
+    override var onRemoteVideoTrack: ((VideoTrack) -> Unit)? = null
     override var onError: ((String) -> Unit)? = null
 
     override fun start() = Unit
@@ -54,6 +57,7 @@ class AndroidWebRtcPeerConnectionGateway(
 
     override var onLocalOffer: ((String) -> Unit)? = null
     override var onLocalIceCandidate: ((RemoteIceCandidate) -> Unit)? = null
+    override var onRemoteVideoTrack: ((VideoTrack) -> Unit)? = null
     override var onError: ((String) -> Unit)? = null
 
     override fun start() {
@@ -190,7 +194,13 @@ class AndroidWebRtcPeerConnectionGateway(
             override fun onAddTrack(
                 receiver: org.webrtc.RtpReceiver,
                 streams: Array<out org.webrtc.MediaStream>,
-            ) = Unit
+            ) {
+                val track = receiver.track()
+                if (track is VideoTrack) {
+                    track.setEnabled(true)
+                    onRemoteVideoTrack?.invoke(track)
+                }
+            }
         }
 }
 
