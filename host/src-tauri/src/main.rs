@@ -1,9 +1,15 @@
 use host_core::config::HostConfig;
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
-use media_pipeline::MediaPipeline;
+#[cfg(not(all(feature = "media-windows-mf-h264", windows)))]
+use media_pipeline::NullH264Encoder;
+#[cfg(not(all(feature = "media-windows-capture", windows)))]
+use media_pipeline::RecordingFrameSource;
 #[cfg(all(feature = "media-windows-capture", windows))]
-use media_pipeline::{NullH264Encoder, WindowsGdiFrameSource};
+use media_pipeline::WindowsGdiFrameSource;
+#[cfg(all(feature = "media-windows-mf-h264", windows))]
+use media_pipeline::WindowsMediaFoundationH264Encoder;
+use media_pipeline::{FrameSource, MediaPipeline, VideoEncoder};
 #[cfg(feature = "real-webrtc")]
 use signaling_server::RealWebRtcPeerGateway;
 #[cfg(windows)]
@@ -334,27 +340,69 @@ fn peer_backend_label() -> &'static str {
     "recording webrtc"
 }
 
-#[cfg(not(all(feature = "media-windows-capture", windows)))]
-fn media_backend_label() -> &'static str {
-    "recording capture + null h264 encoder"
-}
-
-#[cfg(all(feature = "media-windows-capture", windows))]
 fn build_media_pipeline() -> MediaPipeline {
     MediaPipeline::new(
         StreamConfig::default(),
-        Box::new(WindowsGdiFrameSource::default()),
-        Box::new(NullH264Encoder::default()),
+        build_frame_source(),
+        build_video_encoder(),
     )
-    .expect("default Windows media pipeline config must be supported")
-}
-
-#[cfg(not(all(feature = "media-windows-capture", windows)))]
-fn build_media_pipeline() -> MediaPipeline {
-    MediaPipeline::recording(StreamConfig::default())
+    .expect("default media pipeline config must be supported")
 }
 
 #[cfg(all(feature = "media-windows-capture", windows))]
+fn build_frame_source() -> Box<dyn FrameSource> {
+    Box::new(WindowsGdiFrameSource::default())
+}
+
+#[cfg(not(all(feature = "media-windows-capture", windows)))]
+fn build_frame_source() -> Box<dyn FrameSource> {
+    Box::new(RecordingFrameSource::default())
+}
+
+#[cfg(all(feature = "media-windows-mf-h264", windows))]
+fn build_video_encoder() -> Box<dyn VideoEncoder> {
+    Box::new(
+        WindowsMediaFoundationH264Encoder::new()
+            .expect("failed to initialize Media Foundation H.264 encoder"),
+    )
+}
+
+#[cfg(not(all(feature = "media-windows-mf-h264", windows)))]
+fn build_video_encoder() -> Box<dyn VideoEncoder> {
+    Box::new(NullH264Encoder::default())
+}
+
+#[cfg(all(
+    feature = "media-windows-capture",
+    feature = "media-windows-mf-h264",
+    windows
+))]
+fn media_backend_label() -> &'static str {
+    "Windows GDI capture + Media Foundation h264"
+}
+
+#[cfg(all(
+    feature = "media-windows-capture",
+    not(feature = "media-windows-mf-h264"),
+    windows
+))]
 fn media_backend_label() -> &'static str {
     "Windows GDI capture + null h264 encoder"
+}
+
+#[cfg(all(
+    not(feature = "media-windows-capture"),
+    feature = "media-windows-mf-h264",
+    windows
+))]
+fn media_backend_label() -> &'static str {
+    "recording capture + Media Foundation h264"
+}
+
+#[cfg(not(any(
+    all(feature = "media-windows-capture", windows),
+    all(feature = "media-windows-mf-h264", windows)
+)))]
+fn media_backend_label() -> &'static str {
+    "recording capture + null h264 encoder"
 }

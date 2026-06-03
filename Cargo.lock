@@ -2220,6 +2220,7 @@ name = "media-pipeline"
 version = "0.1.0"
 dependencies = [
  "host-core",
+ "windows",
  "windows-sys 0.61.2",
 ]
 
