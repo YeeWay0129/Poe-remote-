@@ -91,6 +91,12 @@ struct TrustedDeviceDto {
     public_key: String,
 }
 
+#[derive(serde::Deserialize)]
+struct PairingPasswordDto {
+    #[serde(rename = "passwordHash")]
+    password_hash: String,
+}
+
 struct AppState {
     config_path: PathBuf,
     config: SharedHostConfig,
@@ -247,6 +253,24 @@ fn stop_signaling(state: tauri::State<'_, AppState>) -> HostStatus {
     host_status(state)
 }
 
+#[tauri::command]
+fn update_pairing_password(
+    state: tauri::State<'_, AppState>,
+    request: PairingPasswordDto,
+) -> Result<HostStatus, String> {
+    if !is_sha256_hex(&request.password_hash) {
+        return Err("passwordHash must be a SHA-256 hex string".to_string());
+    }
+
+    let mut config = state.config.lock().expect("config lock poisoned");
+    config.pairing_password_hash = request.password_hash;
+    save_config(&state.config_path, &config)
+        .map_err(|error| format!("failed to save config: {error:?}"))?;
+    drop(config);
+
+    Ok(host_status(state))
+}
+
 fn spawn_media_runtime(
     media_pipeline: Arc<Mutex<MediaPipeline>>,
     peer_gateway: SharedWebRtcPeerGateway,
@@ -300,6 +324,10 @@ fn host_config_path() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("remote-poe-host-config.json")
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 #[tauri::command]
@@ -391,6 +419,7 @@ fn main() {
             stop_streaming,
             start_signaling,
             stop_signaling,
+            update_pairing_password,
             pair_device,
             trusted_devices,
             revoke_device

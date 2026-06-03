@@ -27,6 +27,8 @@ type HostStatus = {
 function App() {
   const [status, setStatus] = useState<HostStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pairingPassword, setPairingPassword] = useState("");
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
 
   async function refreshStatus() {
     try {
@@ -57,6 +59,27 @@ function App() {
       setError(null);
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  async function savePairingPassword() {
+    if (!pairingPassword) {
+      setError("Pairing password is required.");
+      return;
+    }
+
+    try {
+      const passwordHash = await sha256Hex(pairingPassword);
+      const nextStatus = await invoke<HostStatus>("update_pairing_password", {
+        request: { passwordHash },
+      });
+      setStatus(nextStatus);
+      setPairingPassword("");
+      setSettingsMessage("Pairing password saved.");
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+      setSettingsMessage(null);
     }
   }
 
@@ -133,6 +156,21 @@ function App() {
         </div>
       </section>
 
+      <section className="panel settings-panel">
+        <h2>配對密碼</h2>
+        <div className="settings-row">
+          <input
+            type="password"
+            value={pairingPassword}
+            onChange={(event) => setPairingPassword(event.currentTarget.value)}
+            placeholder="新的配對密碼"
+          />
+          <button onClick={savePairingPassword}>儲存</button>
+        </div>
+        <p className="muted">Android 配對時要輸入相同密碼。預設密碼是 remote-poe。</p>
+        {settingsMessage && <p className="success">{settingsMessage}</p>}
+      </section>
+
       <section className="panel">
         <h2>最近 Signaling 事件</h2>
         {recentEvents.length === 0 ? (
@@ -177,6 +215,14 @@ function formatBytes(bytes: number | null | undefined): string {
   if (!bytes) return "尚未收到";
 
   return `${bytes} bytes`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

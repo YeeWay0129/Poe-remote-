@@ -59,6 +59,24 @@ small {
   flex-wrap: wrap;
 }
 
+.settings-panel {
+  align-items: start;
+}
+
+.settings-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+input {
+  min-width: 240px;
+  padding: 10px 12px;
+  border: 1px solid #c9d1dd;
+  border-radius: 6px;
+  font: inherit;
+}
+
 .event-list {
   display: grid;
   gap: 8px;
@@ -87,4 +105,9 @@ button {
 
 .error {
   color: #b42318;
+}
+
+.success {
+  margin: 0;
+  color: #067647;
 }
