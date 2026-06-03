@@ -28,10 +28,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -150,6 +153,7 @@ private fun ConnectScreen(
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun PlayerScreen(
     streamConfig: StreamConfig,
     onDisconnect: () -> Unit,
@@ -161,7 +165,12 @@ private fun PlayerScreen(
             .background(Color.Black)
             .focusable()
             .onPreviewKeyEvent { keyEvent ->
-                onInput(RemoteInputEvent.Keyboard(keyEvent.nativeKeyEvent.keyCode, keyEvent.nativeKeyEvent.action))
+                val action = when (keyEvent.type) {
+                    KeyEventType.KeyDown -> KeyEvent.ACTION_DOWN
+                    KeyEventType.KeyUp -> KeyEvent.ACTION_UP
+                    else -> return@onPreviewKeyEvent false
+                }
+                onInput(RemoteInputEvent.Keyboard(keyEvent.key.keyCode.toInt(), action))
                 true
             }
             .pointerInteropFilter { motionEvent ->
