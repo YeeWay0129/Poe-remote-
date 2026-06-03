@@ -1,6 +1,8 @@
 package com.remotepoe.app.remote
 
 import android.content.Context
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -24,6 +26,7 @@ interface PeerConnectionGateway {
     fun createOffer()
     fun setRemoteAnswer(sdp: String)
     fun addRemoteIceCandidate(candidate: RemoteIceCandidate)
+    fun sendControlMessage(json: String): Boolean
     fun close()
 }
 
@@ -36,6 +39,7 @@ class NoopPeerConnectionGateway : PeerConnectionGateway {
     override fun createOffer() = Unit
     override fun setRemoteAnswer(sdp: String) = Unit
     override fun addRemoteIceCandidate(candidate: RemoteIceCandidate) = Unit
+    override fun sendControlMessage(json: String): Boolean = false
     override fun close() = Unit
 }
 
@@ -113,6 +117,16 @@ class AndroidWebRtcPeerConnectionGateway(
                 candidate.candidate,
             ),
         )
+    }
+
+    override fun sendControlMessage(json: String): Boolean {
+        if (json.isBlank()) return false
+
+        val channel = controlChannel ?: return false
+        if (channel.state() != DataChannel.State.OPEN) return false
+
+        val bytes = json.toByteArray(StandardCharsets.UTF_8)
+        return channel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
     }
 
     override fun close() {

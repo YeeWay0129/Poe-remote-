@@ -60,7 +60,10 @@ class RemoteClient @JvmOverloads constructor(
     }
 
     fun sendInput(event: RemoteInputEvent) {
-        signalingSession.sendInput(event)?.let(transport::send)
+        val message = signalingSession.sendInput(event) ?: return
+        if (!peerConnection.sendControlMessage(message.toJsonString())) {
+            transport.send(message)
+        }
     }
 
     fun sendOffer(sdp: String) {
