@@ -1,9 +1,12 @@
 use host_core::config::HostConfig;
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
+#[cfg(windows)]
+use signaling_server::windows_input::WindowsSendInputInjector;
 use signaling_server::{
-    RecordingInputInjector, SharedEventLog, SharedHostConfig, SignalingBindConfig,
-    SignalingEventLog, SignalingRuntime, SignalingServer, spawn_plain_ws_server,
+    CompositeInputInjector, RecordingInputInjector, SharedEventLog, SharedHostConfig,
+    SharedInputInjector, SignalingBindConfig, SignalingEventLog, SignalingRuntime, SignalingServer,
+    spawn_plain_ws_server,
 };
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -19,6 +22,8 @@ struct HostStatus {
     signaling_events: Vec<String>,
     #[serde(rename = "inputEvents")]
     input_events: Vec<String>,
+    #[serde(rename = "inputBackend")]
+    input_backend: &'static str,
     #[serde(rename = "trustedDevices")]
     trusted_devices: usize,
     #[serde(rename = "streamLabel")]
@@ -50,7 +55,8 @@ struct TrustedDeviceDto {
 struct AppState {
     config: SharedHostConfig,
     event_log: SharedEventLog,
-    input_injector: Arc<RecordingInputInjector>,
+    recording_input_injector: Arc<RecordingInputInjector>,
+    input_injector: SharedInputInjector,
     streaming: Mutex<bool>,
     signaling: Mutex<Option<SignalingRuntime>>,
 }
@@ -65,7 +71,7 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         .lock()
         .expect("event log lock poisoned")
         .snapshot();
-    let input_events = state.input_injector.snapshot();
+    let input_events = state.recording_input_injector.snapshot();
 
     HostStatus {
         streaming,
@@ -75,6 +81,7 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
             .map(|runtime| format!("ws://{}/signaling", runtime.bind_addr())),
         signaling_events,
         input_events,
+        input_backend: input_backend_label(),
         trusted_devices: config.trusted_devices.len(),
         stream_label: format!(
             "{}x{}@{} {}kbps",
@@ -105,7 +112,7 @@ fn start_signaling(state: tauri::State<'_, AppState>) -> Result<HostStatus, Stri
         let server = SignalingServer::from_shared_parts_with_input(
             Arc::clone(&state.config),
             Arc::clone(&state.event_log),
-            state.input_injector.clone(),
+            Arc::clone(&state.input_injector),
         );
         let runtime = spawn_plain_ws_server(
             server,
@@ -184,6 +191,9 @@ fn revoke_device(state: tauri::State<'_, AppState>, device_id: String) -> bool {
 }
 
 fn main() {
+    let recording_input_injector = Arc::new(RecordingInputInjector::new(64));
+    let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
+
     tauri::Builder::default()
         .manage(AppState {
             config: Arc::new(Mutex::new(HostConfig {
@@ -193,7 +203,8 @@ fn main() {
                 autostart: false,
             })),
             event_log: Arc::new(Mutex::new(SignalingEventLog::new(64))),
-            input_injector: Arc::new(RecordingInputInjector::new(64)),
+            recording_input_injector,
+            input_injector,
             streaming: Mutex::new(false),
             signaling: Mutex::new(None),
         })
@@ -209,4 +220,27 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run remote POE host");
+}
+
+#[cfg(windows)]
+fn build_input_injector(recording: Arc<RecordingInputInjector>) -> SharedInputInjector {
+    Arc::new(CompositeInputInjector::new(vec![
+        Arc::new(WindowsSendInputInjector),
+        recording,
+    ]))
+}
+
+#[cfg(not(windows))]
+fn build_input_injector(recording: Arc<RecordingInputInjector>) -> SharedInputInjector {
+    recording
+}
+
+#[cfg(windows)]
+fn input_backend_label() -> &'static str {
+    "Windows SendInput + recording"
+}
+
+#[cfg(not(windows))]
+fn input_backend_label() -> &'static str {
+    "recording only"
 }

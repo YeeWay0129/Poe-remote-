@@ -9,6 +9,7 @@ type HostStatus = {
   signalingEndpoint: string | null;
   signalingEvents: string[];
   inputEvents: string[];
+  inputBackend: string;
   trustedDevices: number;
   streamLabel: string;
 };
@@ -66,6 +67,10 @@ function App() {
           <small>{status?.signalingEndpoint ?? "ws://0.0.0.0:7443/signaling"}</small>
         </div>
         <div>
+          <span className="label">輸入後端</span>
+          <strong>{status?.inputBackend ?? "讀取中"}</strong>
+        </div>
+        <div>
           <span className="label">串流狀態</span>
           <strong>{status?.streaming ? "執行中" : "已停止"}</strong>
         </div>
@@ -118,7 +123,7 @@ function App() {
         <ul>
           <li>把 WebRTC offer/answer/ice 接到 Android 與 host 的 peer connection。</li>
           <li>接上 Windows Graphics Capture 與 H.264 硬體編碼。</li>
-          <li>把 input_event 轉成 Windows SendInput。</li>
+          <li>替 SendInput 加上權限與焦點檢查，避免輸入送到錯誤視窗。</li>
         </ul>
       </section>
 

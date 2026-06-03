@@ -35,6 +35,25 @@ pub trait InputInjector: Send + Sync {
     fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError>;
 }
 
+pub struct CompositeInputInjector {
+    injectors: Vec<SharedInputInjector>,
+}
+
+impl CompositeInputInjector {
+    pub fn new(injectors: Vec<SharedInputInjector>) -> Self {
+        Self { injectors }
+    }
+}
+
+impl InputInjector for CompositeInputInjector {
+    fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError> {
+        for injector in &self.injectors {
+            injector.inject(event)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct RecordingInputInjector {
     max_len: usize,
@@ -74,6 +93,149 @@ impl InputInjector for RecordingInputInjector {
     fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError> {
         self.push(input_event_summary(event));
         Ok(())
+    }
+}
+
+#[cfg(windows)]
+pub mod windows_input {
+    use super::{InputEvent, InputInjectionError, InputInjector};
+    use host_core::input::{ButtonAction, KeyAction, MouseButton, PointerMode};
+    use std::mem::size_of;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+        KEYEVENTF_KEYUP, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL,
+        MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+    };
+
+    const XBUTTON1_DATA: u32 = 1;
+    const XBUTTON2_DATA: u32 = 2;
+
+    #[derive(Debug, Default)]
+    pub struct WindowsSendInputInjector;
+
+    impl InputInjector for WindowsSendInputInjector {
+        fn inject(&self, event: &InputEvent) -> Result<(), InputInjectionError> {
+            let mut inputs = event_to_windows_inputs(event);
+            if inputs.is_empty() {
+                return Ok(());
+            }
+
+            let sent = unsafe {
+                SendInput(
+                    inputs.len() as u32,
+                    inputs.as_mut_ptr(),
+                    size_of::<INPUT>() as i32,
+                )
+            };
+
+            if sent == inputs.len() as u32 {
+                Ok(())
+            } else {
+                Err(InputInjectionError::BackendUnavailable)
+            }
+        }
+    }
+
+    pub fn event_to_windows_inputs(event: &InputEvent) -> Vec<INPUT> {
+        match event {
+            InputEvent::Keyboard { key_code, action } => {
+                vec![keyboard_input(
+                    *key_code as VIRTUAL_KEY,
+                    key_action_flags(action),
+                )]
+            }
+            InputEvent::MouseMove { dx, dy, mode } => {
+                vec![mouse_input(
+                    *dx,
+                    *dy,
+                    0,
+                    match mode {
+                        PointerMode::Relative => MOUSEEVENTF_MOVE,
+                        PointerMode::Absolute => MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+                    },
+                )]
+            }
+            InputEvent::MouseButton { button, action } => {
+                vec![mouse_input(
+                    0,
+                    0,
+                    mouse_button_data(button),
+                    mouse_button_flags(button, action),
+                )]
+            }
+            InputEvent::MouseWheel { delta_x, delta_y } => {
+                let mut inputs = Vec::new();
+                if *delta_y != 0 {
+                    inputs.push(mouse_input(0, 0, *delta_y as u32, MOUSEEVENTF_WHEEL));
+                }
+                if *delta_x != 0 {
+                    inputs.push(mouse_input(0, 0, *delta_x as u32, MOUSEEVENTF_HWHEEL));
+                }
+                inputs
+            }
+            InputEvent::PointerModeChanged(_) => Vec::new(),
+        }
+    }
+
+    fn keyboard_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn mouse_input(dx: i32, dy: i32, mouse_data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: mouse_data,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn key_action_flags(action: &KeyAction) -> KEYBD_EVENT_FLAGS {
+        match action {
+            KeyAction::Down => 0,
+            KeyAction::Up => KEYEVENTF_KEYUP,
+        }
+    }
+
+    fn mouse_button_flags(button: &MouseButton, action: &ButtonAction) -> MOUSE_EVENT_FLAGS {
+        match (button, action) {
+            (MouseButton::Left, ButtonAction::Down) => MOUSEEVENTF_LEFTDOWN,
+            (MouseButton::Left, ButtonAction::Up) => MOUSEEVENTF_LEFTUP,
+            (MouseButton::Right, ButtonAction::Down) => MOUSEEVENTF_RIGHTDOWN,
+            (MouseButton::Right, ButtonAction::Up) => MOUSEEVENTF_RIGHTUP,
+            (MouseButton::Middle, ButtonAction::Down) => MOUSEEVENTF_MIDDLEDOWN,
+            (MouseButton::Middle, ButtonAction::Up) => MOUSEEVENTF_MIDDLEUP,
+            (MouseButton::Back | MouseButton::Forward, ButtonAction::Down) => MOUSEEVENTF_XDOWN,
+            (MouseButton::Back | MouseButton::Forward, ButtonAction::Up) => MOUSEEVENTF_XUP,
+        }
+    }
+
+    fn mouse_button_data(button: &MouseButton) -> u32 {
+        match button {
+            MouseButton::Back => XBUTTON1_DATA,
+            MouseButton::Forward => XBUTTON2_DATA,
+            _ => 0,
+        }
     }
 }
 
@@ -682,6 +844,62 @@ mod tests {
         server.handle_text_frame(&json).expect("frame accepted");
 
         assert_eq!(injector.snapshot(), vec!["keyboard down 87".to_string()]);
+    }
+
+    #[test]
+    fn composite_input_injector_invokes_recording_backend() {
+        let recording = Arc::new(RecordingInputInjector::new(8));
+        let composite = CompositeInputInjector::new(vec![recording.clone()]);
+        let event = InputEvent::MouseButton {
+            button: host_core::input::MouseButton::Left,
+            action: host_core::input::ButtonAction::Down,
+        };
+
+        composite.inject(&event).expect("composite injects");
+
+        assert_eq!(
+            recording.snapshot(),
+            vec!["mouse button left down".to_string()]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_input_conversion_maps_keyboard_without_injecting() {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT_KEYBOARD, KEYEVENTF_KEYUP};
+
+        let inputs = crate::windows_input::event_to_windows_inputs(&InputEvent::Keyboard {
+            key_code: 87,
+            action: KeyAction::Up,
+        });
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].r#type, INPUT_KEYBOARD);
+        unsafe {
+            assert_eq!(inputs[0].Anonymous.ki.wVk, 87);
+            assert_eq!(inputs[0].Anonymous.ki.dwFlags, KEYEVENTF_KEYUP);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_input_conversion_splits_wheel_axes() {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT_MOUSE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL,
+        };
+
+        let inputs = crate::windows_input::event_to_windows_inputs(&InputEvent::MouseWheel {
+            delta_x: 120,
+            delta_y: -120,
+        });
+
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].r#type, INPUT_MOUSE);
+        assert_eq!(inputs[1].r#type, INPUT_MOUSE);
+        unsafe {
+            assert_eq!(inputs[0].Anonymous.mi.dwFlags, MOUSEEVENTF_WHEEL);
+            assert_eq!(inputs[1].Anonymous.mi.dwFlags, MOUSEEVENTF_HWHEEL);
+        }
     }
 
     #[test]
