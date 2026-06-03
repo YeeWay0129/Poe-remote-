@@ -1,5 +1,6 @@
 use crate::{WebRtcPeerError, WebRtcPeerGateway, WebRtcPeerResponse};
 use host_core::signaling::IceCandidatePayload;
+use media_pipeline::EncodedFrame;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use webrtc::api::APIBuilder;
@@ -118,5 +119,9 @@ impl WebRtcPeerGateway for RealWebRtcPeerGateway {
         self.runtime
             .block_on(async move { peer_connection.add_ice_candidate(candidate).await })
             .map_err(|_| WebRtcPeerError::InvalidOffer)
+    }
+
+    fn push_encoded_frame(&self, _frame: &EncodedFrame) -> Result<(), WebRtcPeerError> {
+        Ok(())
     }
 }

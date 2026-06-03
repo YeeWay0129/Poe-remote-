@@ -153,10 +153,14 @@ fn start_streaming(state: tauri::State<'_, AppState>) -> Result<HostStatus, Stri
         .lock()
         .expect("media pipeline lock poisoned");
     media_pipeline.start();
-    media_pipeline
+    let encoded_frame = media_pipeline
         .capture_and_encode_once()
         .map_err(|error| format!("failed to capture first frame: {error:?}"))?;
     drop(media_pipeline);
+    state
+        .peer_gateway
+        .push_encoded_frame(&encoded_frame)
+        .map_err(|error| format!("failed to queue encoded frame: {error:?}"))?;
 
     Ok(host_status(state))
 }

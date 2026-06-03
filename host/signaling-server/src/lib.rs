@@ -8,6 +8,7 @@ use host_core::signaling::{
     AuthPayload, ErrorPayload, IceCandidatePayload, SessionDescriptionPayload, SignalingMessage,
     SignalingPayload, SignalingType,
 };
+use media_pipeline::EncodedFrame;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -45,12 +46,15 @@ pub trait WebRtcPeerGateway: Send + Sync {
     fn accept_offer(&self, offer_sdp: &str) -> Result<WebRtcPeerResponse, WebRtcPeerError>;
 
     fn add_remote_ice(&self, candidate: &IceCandidatePayload) -> Result<(), WebRtcPeerError>;
+
+    fn push_encoded_frame(&self, frame: &EncodedFrame) -> Result<(), WebRtcPeerError>;
 }
 
 #[derive(Debug)]
 pub struct RecordingWebRtcPeerGateway {
     accepted_offers: Mutex<Vec<String>>,
     remote_ice: Mutex<Vec<IceCandidatePayload>>,
+    encoded_frame_bytes: Mutex<Vec<usize>>,
 }
 
 impl RecordingWebRtcPeerGateway {
@@ -58,6 +62,7 @@ impl RecordingWebRtcPeerGateway {
         Self {
             accepted_offers: Mutex::new(Vec::new()),
             remote_ice: Mutex::new(Vec::new()),
+            encoded_frame_bytes: Mutex::new(Vec::new()),
         }
     }
 
@@ -72,6 +77,13 @@ impl RecordingWebRtcPeerGateway {
         self.remote_ice
             .lock()
             .map(|candidates| candidates.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn snapshot_encoded_frame_bytes(&self) -> Vec<usize> {
+        self.encoded_frame_bytes
+            .lock()
+            .map(|frames| frames.clone())
             .unwrap_or_default()
     }
 }
@@ -115,6 +127,14 @@ impl WebRtcPeerGateway for RecordingWebRtcPeerGateway {
             .lock()
             .map_err(|_| WebRtcPeerError::BackendUnavailable)?
             .push(candidate.clone());
+        Ok(())
+    }
+
+    fn push_encoded_frame(&self, frame: &EncodedFrame) -> Result<(), WebRtcPeerError> {
+        self.encoded_frame_bytes
+            .lock()
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)?
+            .push(frame.data.len());
         Ok(())
     }
 }
@@ -1063,6 +1083,7 @@ mod tests {
     use host_core::input::{InputEvent, KeyAction};
     use host_core::pairing::TrustedDevice;
     use host_core::stream::StreamConfig;
+    use host_core::stream::VideoCodec;
 
     #[test]
     fn auth_frame_trusts_new_device_when_password_matches() {
@@ -1306,6 +1327,23 @@ mod tests {
         assert_eq!(replies.len(), 2);
         assert_eq!(replies[0].message_type, SignalingType::Answer);
         assert_eq!(replies[1].message_type, SignalingType::Ice);
+    }
+
+    #[test]
+    fn recording_peer_gateway_records_encoded_frame_bytes() {
+        let peer_gateway = RecordingWebRtcPeerGateway::new();
+        let frame = EncodedFrame {
+            codec: VideoCodec::H264,
+            timestamp_nanos: 0,
+            is_keyframe: true,
+            data: vec![0, 0, 0, 1, 0x67],
+        };
+
+        peer_gateway
+            .push_encoded_frame(&frame)
+            .expect("frame is accepted");
+
+        assert_eq!(peer_gateway.snapshot_encoded_frame_bytes(), vec![5]);
     }
 
     #[test]
