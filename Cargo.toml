@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "host/host-core",
+    "host/media-pipeline",
     "host/signaling-server",
     "host/src-tauri"
 ]

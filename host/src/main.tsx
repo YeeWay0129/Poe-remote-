@@ -11,6 +11,11 @@ type HostStatus = {
   inputEvents: string[];
   inputBackend: string;
   peerBackend: string;
+  mediaBackend: string;
+  capturedFrames: number;
+  encodedFrames: number;
+  lastCapturedBytes: number | null;
+  lastEncodedBytes: number | null;
   trustedDevices: number;
   streamLabel: string;
   peerPhase: string;
@@ -81,6 +86,11 @@ function App() {
         <div>
           <span className="label">串流</span>
           <strong>{status?.streaming ? "執行中" : "已停止"}</strong>
+        </div>
+        <div>
+          <span className="label">Media backend</span>
+          <strong>{status?.mediaBackend ?? "recording capture + null h264 encoder"}</strong>
+          <small>{status?.encodedFrames ?? 0} encoded frames</small>
         </div>
         <div>
           <span className="label">串流設定</span>

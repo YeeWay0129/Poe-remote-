@@ -1,6 +1,7 @@
 use host_core::config::HostConfig;
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
+use media_pipeline::MediaPipeline;
 #[cfg(feature = "real-webrtc")]
 use signaling_server::RealWebRtcPeerGateway;
 #[cfg(windows)]
@@ -29,6 +30,16 @@ struct HostStatus {
     input_backend: &'static str,
     #[serde(rename = "peerBackend")]
     peer_backend: &'static str,
+    #[serde(rename = "mediaBackend")]
+    media_backend: &'static str,
+    #[serde(rename = "capturedFrames")]
+    captured_frames: u64,
+    #[serde(rename = "encodedFrames")]
+    encoded_frames: u64,
+    #[serde(rename = "lastCapturedBytes")]
+    last_captured_bytes: Option<usize>,
+    #[serde(rename = "lastEncodedBytes")]
+    last_encoded_bytes: Option<usize>,
     #[serde(rename = "trustedDevices")]
     trusted_devices: usize,
     #[serde(rename = "streamLabel")]
@@ -72,14 +83,18 @@ struct AppState {
     input_injector: SharedInputInjector,
     peer_state: SharedPeerSignalingState,
     peer_gateway: SharedWebRtcPeerGateway,
-    streaming: Mutex<bool>,
+    media_pipeline: Mutex<MediaPipeline>,
     signaling: Mutex<Option<SignalingRuntime>>,
 }
 
 #[tauri::command]
 fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
     let config = state.config.lock().expect("config lock poisoned");
-    let streaming = *state.streaming.lock().expect("streaming lock poisoned");
+    let media_pipeline = state
+        .media_pipeline
+        .lock()
+        .expect("media pipeline lock poisoned");
+    let media_stats = media_pipeline.stats();
     let signaling = state.signaling.lock().expect("signaling lock poisoned");
     let signaling_events = state
         .event_log
@@ -94,7 +109,7 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         .clone();
 
     HostStatus {
-        streaming,
+        streaming: media_pipeline.is_running(),
         signaling_running: signaling.is_some(),
         signaling_endpoint: signaling
             .as_ref()
@@ -103,6 +118,11 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         input_events,
         input_backend: input_backend_label(),
         peer_backend: peer_backend_label(),
+        media_backend: media_backend_label(),
+        captured_frames: media_stats.captured_frames,
+        encoded_frames: media_stats.encoded_frames,
+        last_captured_bytes: media_stats.last_captured_bytes,
+        last_encoded_bytes: media_stats.last_encoded_bytes,
         trusted_devices: config.trusted_devices.len(),
         stream_label: format!(
             "{}x{}@{} {}kbps",
@@ -119,15 +139,30 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
 }
 
 #[tauri::command]
-fn start_streaming(state: tauri::State<'_, AppState>) {
-    let mut streaming = state.streaming.lock().expect("streaming lock poisoned");
-    *streaming = true;
+fn start_streaming(state: tauri::State<'_, AppState>) -> Result<HostStatus, String> {
+    let mut media_pipeline = state
+        .media_pipeline
+        .lock()
+        .expect("media pipeline lock poisoned");
+    media_pipeline.start();
+    media_pipeline
+        .capture_and_encode_once()
+        .map_err(|error| format!("failed to capture first frame: {error:?}"))?;
+    drop(media_pipeline);
+
+    Ok(host_status(state))
 }
 
 #[tauri::command]
-fn stop_streaming(state: tauri::State<'_, AppState>) {
-    let mut streaming = state.streaming.lock().expect("streaming lock poisoned");
-    *streaming = false;
+fn stop_streaming(state: tauri::State<'_, AppState>) -> HostStatus {
+    let mut media_pipeline = state
+        .media_pipeline
+        .lock()
+        .expect("media pipeline lock poisoned");
+    media_pipeline.stop();
+    drop(media_pipeline);
+
+    host_status(state)
 }
 
 #[tauri::command]
@@ -222,6 +257,7 @@ fn main() {
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
     let peer_gateway = build_peer_gateway();
+    let media_pipeline = MediaPipeline::recording(StreamConfig::default());
 
     tauri::Builder::default()
         .manage(AppState {
@@ -236,7 +272,7 @@ fn main() {
             input_injector,
             peer_state,
             peer_gateway,
-            streaming: Mutex::new(false),
+            media_pipeline: Mutex::new(media_pipeline),
             signaling: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
@@ -294,4 +330,8 @@ fn peer_backend_label() -> &'static str {
 #[cfg(not(feature = "real-webrtc"))]
 fn peer_backend_label() -> &'static str {
     "recording webrtc"
+}
+
+fn media_backend_label() -> &'static str {
+    "recording capture + null h264 encoder"
 }
