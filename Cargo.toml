@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "host/host-core",
-    "host/signaling-server"
+    "host/signaling-server",
+    "host/src-tauri"
 ]
 resolver = "2"

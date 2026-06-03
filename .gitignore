@@ -9,8 +9,10 @@ android/build/
 android/app/build/
 
 host/node_modules/
-host/dist/
+host/dist/*
+!host/dist/.gitkeep
 host/src-tauri/target/
+host/src-tauri/gen/
 
 target/
 *.log

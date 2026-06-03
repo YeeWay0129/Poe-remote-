@@ -1,11 +1,20 @@
 use host_core::config::HostConfig;
 use host_core::pairing::{evaluate_pairing, PairingDecision, PairingRequest};
 use host_core::stream::StreamConfig;
-use std::sync::Mutex;
+use signaling_server::{
+    spawn_plain_ws_server, SharedHostConfig, SignalingBindConfig, SignalingRuntime,
+    SignalingServer,
+};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 #[derive(serde::Serialize)]
 struct HostStatus {
     streaming: bool,
+    #[serde(rename = "signalingRunning")]
+    signaling_running: bool,
+    #[serde(rename = "signalingEndpoint")]
+    signaling_endpoint: Option<String>,
     #[serde(rename = "trustedDevices")]
     trusted_devices: usize,
     #[serde(rename = "streamLabel")]
@@ -35,17 +44,23 @@ struct TrustedDeviceDto {
 }
 
 struct AppState {
-    config: Mutex<HostConfig>,
+    config: SharedHostConfig,
     streaming: Mutex<bool>,
+    signaling: Mutex<Option<SignalingRuntime>>,
 }
 
 #[tauri::command]
 fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
     let config = state.config.lock().expect("config lock poisoned");
     let streaming = *state.streaming.lock().expect("streaming lock poisoned");
+    let signaling = state.signaling.lock().expect("signaling lock poisoned");
 
     HostStatus {
         streaming,
+        signaling_running: signaling.is_some(),
+        signaling_endpoint: signaling
+            .as_ref()
+            .map(|runtime| format!("ws://{}/signaling", runtime.bind_addr())),
         trusted_devices: config.trusted_devices.len(),
         stream_label: format!(
             "{}x{}@{} {}kbps",
@@ -67,6 +82,38 @@ fn start_streaming(state: tauri::State<'_, AppState>) {
 fn stop_streaming(state: tauri::State<'_, AppState>) {
     let mut streaming = state.streaming.lock().expect("streaming lock poisoned");
     *streaming = false;
+}
+
+#[tauri::command]
+fn start_signaling(state: tauri::State<'_, AppState>) -> Result<HostStatus, String> {
+    let mut signaling = state.signaling.lock().expect("signaling lock poisoned");
+    if signaling.is_none() {
+        let server = SignalingServer::from_shared_state(Arc::clone(&state.config));
+        let runtime = spawn_plain_ws_server(
+            server,
+            SignalingBindConfig {
+                bind_addr: SocketAddr::from(([0, 0, 0, 0], 7443)),
+                ..SignalingBindConfig::default()
+            },
+        )
+        .map_err(|error| format!("failed to start signaling: {error}"))?;
+
+        *signaling = Some(runtime);
+    }
+    drop(signaling);
+
+    Ok(host_status(state))
+}
+
+#[tauri::command]
+fn stop_signaling(state: tauri::State<'_, AppState>) -> HostStatus {
+    let mut signaling = state.signaling.lock().expect("signaling lock poisoned");
+    if let Some(mut runtime) = signaling.take() {
+        runtime.stop();
+    }
+    drop(signaling);
+
+    host_status(state)
 }
 
 #[tauri::command]
@@ -121,18 +168,21 @@ fn revoke_device(state: tauri::State<'_, AppState>, device_id: String) -> bool {
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
-            config: Mutex::new(HostConfig {
+            config: Arc::new(Mutex::new(HostConfig {
                 pairing_password_hash: String::new(),
                 trusted_devices: Vec::new(),
                 stream: StreamConfig::default(),
                 autostart: false,
-            }),
+            })),
             streaming: Mutex::new(false),
+            signaling: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             host_status,
             start_streaming,
             stop_streaming,
+            start_signaling,
+            stop_signaling,
             pair_device,
             trusted_devices,
             revoke_device

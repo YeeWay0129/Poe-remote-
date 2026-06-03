@@ -7,9 +7,13 @@ use host_core::signaling::{
 };
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+
+pub type SharedHostConfig = Arc<Mutex<HostConfig>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignalingBindConfig {
@@ -60,14 +64,16 @@ pub enum SignalingFrameError {
 
 #[derive(Clone)]
 pub struct SignalingServer {
-    state: Arc<Mutex<HostConfig>>,
+    state: SharedHostConfig,
 }
 
 impl SignalingServer {
     pub fn new(config: HostConfig) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(config)),
-        }
+        Self::from_shared_state(Arc::new(Mutex::new(config)))
+    }
+
+    pub fn from_shared_state(state: SharedHostConfig) -> Self {
+        Self { state }
     }
 
     pub fn snapshot_config(&self) -> Result<HostConfig, SignalingFrameError> {
@@ -177,19 +183,97 @@ impl SignalingServer {
     }
 }
 
+pub struct SignalingRuntime {
+    bind_addr: SocketAddr,
+    shutdown: Option<oneshot::Sender<()>>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl SignalingRuntime {
+    pub fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+
+        if let Some(join_handle) = self.join_handle.take() {
+            let _ = join_handle.join();
+        }
+    }
+}
+
+impl Drop for SignalingRuntime {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+pub fn spawn_plain_ws_server(
+    server: SignalingServer,
+    config: SignalingBindConfig,
+) -> std::io::Result<SignalingRuntime> {
+    let std_listener = std::net::TcpListener::bind(config.bind_addr)?;
+    std_listener.set_nonblocking(true)?;
+    let bind_addr = std_listener.local_addr()?;
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+    let join_handle = thread::Builder::new()
+        .name("remote-poe-signaling".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build();
+            let Ok(runtime) = runtime else {
+                return;
+            };
+
+            runtime.block_on(async move {
+                if let Ok(listener) = TcpListener::from_std(std_listener) {
+                    let _ = run_plain_ws_server_with_listener(server, listener, shutdown_rx).await;
+                }
+            });
+        })?;
+
+    Ok(SignalingRuntime {
+        bind_addr,
+        shutdown: Some(shutdown_tx),
+        join_handle: Some(join_handle),
+    })
+}
+
 pub async fn run_plain_ws_server(
     server: SignalingServer,
     config: SignalingBindConfig,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(config.bind_addr).await?;
+    let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+    run_plain_ws_server_with_listener(server, listener, shutdown_rx).await
+}
 
+async fn run_plain_ws_server_with_listener(
+    server: SignalingServer,
+    listener: TcpListener,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
-        let server = server.clone();
-        tokio::spawn(async move {
-            let _ = handle_connection(server, stream).await;
-        });
+        tokio::select! {
+            accept_result = listener.accept() => {
+                let (stream, _) = accept_result?;
+                let server = server.clone();
+                tokio::spawn(async move {
+                    let _ = handle_connection(server, stream).await;
+                });
+            }
+            _ = &mut shutdown_rx => {
+                break;
+            }
+        }
     }
+
+    Ok(())
 }
 
 async fn handle_connection(
@@ -343,5 +427,21 @@ mod tests {
             server.handle_text_frame(&json),
             Ok(FrameResult::Accepted(ServerEvent::InputAccepted))
         );
+    }
+
+    #[test]
+    fn spawned_server_reports_bound_address_and_stops() {
+        let server = SignalingServer::new(HostConfig::new("hash"));
+        let mut runtime = spawn_plain_ws_server(
+            server,
+            SignalingBindConfig {
+                bind_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+                security: TransportSecurity::PlainWsForVpn,
+            },
+        )
+        .expect("server starts on ephemeral port");
+
+        assert_ne!(runtime.bind_addr().port(), 0);
+        runtime.stop();
     }
 }

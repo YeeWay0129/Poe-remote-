@@ -9,6 +9,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 host-core = { path = "../host-core" }
 serde = { version = "1", features = ["derive"] }
+signaling-server = { path = "../signaling-server" }
 tauri = { version = "2", features = ["tray-icon"] }
 
 [features]

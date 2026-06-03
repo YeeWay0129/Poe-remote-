@@ -41,6 +41,19 @@ p {
   margin-bottom: 4px;
 }
 
+small {
+  display: block;
+  margin-top: 4px;
+  color: #6a7380;
+  font-family: Consolas, "SFMono-Regular", monospace;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 button {
   width: fit-content;
   padding: 10px 14px;
