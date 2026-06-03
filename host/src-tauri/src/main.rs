@@ -27,6 +27,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+const DEFAULT_PAIRING_PASSWORD_HASH: &str =
+    "c53fb561532b1638f6ce48c7992eb69eda7780a3af1b0205d40342b922a77c19";
+
 #[derive(serde::Serialize)]
 struct HostStatus {
     streaming: bool,
@@ -361,12 +364,13 @@ fn main() {
     let peer_gateway = build_peer_gateway();
     let media_pipeline = Arc::new(Mutex::new(build_media_pipeline()));
     let config_path = host_config_path();
-    let config = load_config(&config_path, "").unwrap_or_else(|_| HostConfig {
-        pairing_password_hash: String::new(),
-        trusted_devices: Vec::new(),
-        stream: StreamConfig::default(),
-        autostart: false,
-    });
+    let config =
+        load_config(&config_path, DEFAULT_PAIRING_PASSWORD_HASH).unwrap_or_else(|_| HostConfig {
+            pairing_password_hash: DEFAULT_PAIRING_PASSWORD_HASH.to_string(),
+            trusted_devices: Vec::new(),
+            stream: StreamConfig::default(),
+            autostart: false,
+        });
 
     tauri::Builder::default()
         .manage(AppState {
