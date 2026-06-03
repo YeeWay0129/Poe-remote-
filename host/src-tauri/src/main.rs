@@ -1,12 +1,15 @@
 use host_core::config::HostConfig;
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
+#[cfg(feature = "real-webrtc")]
+use signaling_server::RealWebRtcPeerGateway;
 #[cfg(windows)]
 use signaling_server::windows_input::WindowsSendInputInjector;
 use signaling_server::{
     CompositeInputInjector, PeerSignalingState, RecordingInputInjector, SharedEventLog,
-    SharedHostConfig, SharedInputInjector, SharedPeerSignalingState, SignalingBindConfig,
-    SignalingEventLog, SignalingRuntime, SignalingServer, spawn_plain_ws_server,
+    SharedHostConfig, SharedInputInjector, SharedPeerSignalingState, SharedWebRtcPeerGateway,
+    SignalingBindConfig, SignalingEventLog, SignalingRuntime, SignalingServer,
+    spawn_plain_ws_server,
 };
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -24,6 +27,8 @@ struct HostStatus {
     input_events: Vec<String>,
     #[serde(rename = "inputBackend")]
     input_backend: &'static str,
+    #[serde(rename = "peerBackend")]
+    peer_backend: &'static str,
     #[serde(rename = "trustedDevices")]
     trusted_devices: usize,
     #[serde(rename = "streamLabel")]
@@ -66,6 +71,7 @@ struct AppState {
     recording_input_injector: Arc<RecordingInputInjector>,
     input_injector: SharedInputInjector,
     peer_state: SharedPeerSignalingState,
+    peer_gateway: SharedWebRtcPeerGateway,
     streaming: Mutex<bool>,
     signaling: Mutex<Option<SignalingRuntime>>,
 }
@@ -96,6 +102,7 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         signaling_events,
         input_events,
         input_backend: input_backend_label(),
+        peer_backend: peer_backend_label(),
         trusted_devices: config.trusted_devices.len(),
         stream_label: format!(
             "{}x{}@{} {}kbps",
@@ -127,11 +134,12 @@ fn stop_streaming(state: tauri::State<'_, AppState>) {
 fn start_signaling(state: tauri::State<'_, AppState>) -> Result<HostStatus, String> {
     let mut signaling = state.signaling.lock().expect("signaling lock poisoned");
     if signaling.is_none() {
-        let server = SignalingServer::from_shared_parts_with_input_and_peer_state(
+        let server = SignalingServer::from_shared_parts_with_input_peer_state_and_gateway(
             Arc::clone(&state.config),
             Arc::clone(&state.event_log),
             Arc::clone(&state.input_injector),
             Arc::clone(&state.peer_state),
+            Arc::clone(&state.peer_gateway),
         );
         let runtime = spawn_plain_ws_server(
             server,
@@ -213,6 +221,7 @@ fn main() {
     let recording_input_injector = Arc::new(RecordingInputInjector::new(64));
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
+    let peer_gateway = build_peer_gateway();
 
     tauri::Builder::default()
         .manage(AppState {
@@ -226,6 +235,7 @@ fn main() {
             recording_input_injector,
             input_injector,
             peer_state,
+            peer_gateway,
             streaming: Mutex::new(false),
             signaling: Mutex::new(None),
         })
@@ -264,4 +274,24 @@ fn input_backend_label() -> &'static str {
 #[cfg(not(windows))]
 fn input_backend_label() -> &'static str {
     "recording only"
+}
+
+#[cfg(feature = "real-webrtc")]
+fn build_peer_gateway() -> SharedWebRtcPeerGateway {
+    Arc::new(RealWebRtcPeerGateway::new().expect("failed to initialize WebRTC peer gateway"))
+}
+
+#[cfg(not(feature = "real-webrtc"))]
+fn build_peer_gateway() -> SharedWebRtcPeerGateway {
+    Arc::new(signaling_server::RecordingWebRtcPeerGateway::new())
+}
+
+#[cfg(feature = "real-webrtc")]
+fn peer_backend_label() -> &'static str {
+    "real webrtc"
+}
+
+#[cfg(not(feature = "real-webrtc"))]
+fn peer_backend_label() -> &'static str {
+    "recording webrtc"
 }

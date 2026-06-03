@@ -17,6 +17,12 @@ use tokio::sync::oneshot;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
+#[cfg(feature = "real-webrtc")]
+mod real_webrtc;
+
+#[cfg(feature = "real-webrtc")]
+pub use real_webrtc::RealWebRtcPeerGateway;
+
 pub type SharedHostConfig = Arc<Mutex<HostConfig>>;
 pub type SharedEventLog = Arc<Mutex<SignalingEventLog>>;
 pub type SharedInputInjector = Arc<dyn InputInjector>;

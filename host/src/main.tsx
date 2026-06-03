@@ -10,6 +10,7 @@ type HostStatus = {
   signalingEvents: string[];
   inputEvents: string[];
   inputBackend: string;
+  peerBackend: string;
   trustedDevices: number;
   streamLabel: string;
   peerPhase: string;
@@ -103,6 +104,10 @@ function App() {
         <div>
           <span className="label">WebRTC phase</span>
           <strong>{status?.peerPhase ?? "idle"}</strong>
+        </div>
+        <div>
+          <span className="label">WebRTC backend</span>
+          <strong>{status?.peerBackend ?? "recording webrtc"}</strong>
         </div>
         <div>
           <span className="label">Offer SDP</span>
