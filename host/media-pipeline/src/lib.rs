@@ -1,5 +1,11 @@
 use host_core::stream::{StreamConfig, VideoCodec};
 
+#[cfg(all(feature = "windows-capture", windows))]
+mod windows_capture;
+
+#[cfg(all(feature = "windows-capture", windows))]
+pub use windows_capture::WindowsGdiFrameSource;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
     Bgra8,

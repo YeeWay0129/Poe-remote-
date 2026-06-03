@@ -16,4 +16,5 @@ tauri = { version = "2", features = ["tray-icon"] }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+media-windows-capture = ["media-pipeline/windows-capture"]
 real-webrtc = ["signaling-server/real-webrtc"]

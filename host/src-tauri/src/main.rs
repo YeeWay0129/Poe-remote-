@@ -2,6 +2,8 @@ use host_core::config::HostConfig;
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
 use media_pipeline::MediaPipeline;
+#[cfg(all(feature = "media-windows-capture", windows))]
+use media_pipeline::{NullH264Encoder, WindowsGdiFrameSource};
 #[cfg(feature = "real-webrtc")]
 use signaling_server::RealWebRtcPeerGateway;
 #[cfg(windows)]
@@ -257,7 +259,7 @@ fn main() {
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
     let peer_gateway = build_peer_gateway();
-    let media_pipeline = MediaPipeline::recording(StreamConfig::default());
+    let media_pipeline = build_media_pipeline();
 
     tauri::Builder::default()
         .manage(AppState {
@@ -332,6 +334,27 @@ fn peer_backend_label() -> &'static str {
     "recording webrtc"
 }
 
+#[cfg(not(all(feature = "media-windows-capture", windows)))]
 fn media_backend_label() -> &'static str {
     "recording capture + null h264 encoder"
+}
+
+#[cfg(all(feature = "media-windows-capture", windows))]
+fn build_media_pipeline() -> MediaPipeline {
+    MediaPipeline::new(
+        StreamConfig::default(),
+        Box::new(WindowsGdiFrameSource::default()),
+        Box::new(NullH264Encoder::default()),
+    )
+    .expect("default Windows media pipeline config must be supported")
+}
+
+#[cfg(not(all(feature = "media-windows-capture", windows)))]
+fn build_media_pipeline() -> MediaPipeline {
+    MediaPipeline::recording(StreamConfig::default())
+}
+
+#[cfg(all(feature = "media-windows-capture", windows))]
+fn media_backend_label() -> &'static str {
+    "Windows GDI capture + null h264 encoder"
 }
