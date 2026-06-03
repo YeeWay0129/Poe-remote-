@@ -21,7 +21,9 @@ use signaling_server::{
     spawn_plain_ws_server,
 };
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 #[derive(serde::Serialize)]
 struct HostStatus {
@@ -91,8 +93,32 @@ struct AppState {
     input_injector: SharedInputInjector,
     peer_state: SharedPeerSignalingState,
     peer_gateway: SharedWebRtcPeerGateway,
-    media_pipeline: Mutex<MediaPipeline>,
+    media_pipeline: Arc<Mutex<MediaPipeline>>,
+    media_runtime: Mutex<Option<MediaRuntime>>,
     signaling: Mutex<Option<SignalingRuntime>>,
+}
+
+struct MediaRuntime {
+    shutdown: Option<mpsc::Sender<()>>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl MediaRuntime {
+    fn stop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+
+        if let Some(join_handle) = self.join_handle.take() {
+            let _ = join_handle.join();
+        }
+    }
+}
+
+impl Drop for MediaRuntime {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 #[tauri::command]
@@ -148,31 +174,31 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
 
 #[tauri::command]
 fn start_streaming(state: tauri::State<'_, AppState>) -> Result<HostStatus, String> {
-    let mut media_pipeline = state
-        .media_pipeline
+    let mut media_runtime = state
+        .media_runtime
         .lock()
-        .expect("media pipeline lock poisoned");
-    media_pipeline.start();
-    let encoded_frame = media_pipeline
-        .capture_and_encode_once()
-        .map_err(|error| format!("failed to capture first frame: {error:?}"))?;
-    drop(media_pipeline);
-    state
-        .peer_gateway
-        .push_encoded_frame(&encoded_frame)
-        .map_err(|error| format!("failed to queue encoded frame: {error:?}"))?;
+        .expect("media runtime lock poisoned");
+    if media_runtime.is_none() {
+        *media_runtime = Some(spawn_media_runtime(
+            Arc::clone(&state.media_pipeline),
+            Arc::clone(&state.peer_gateway),
+        )?);
+    }
+    drop(media_runtime);
 
     Ok(host_status(state))
 }
 
 #[tauri::command]
 fn stop_streaming(state: tauri::State<'_, AppState>) -> HostStatus {
-    let mut media_pipeline = state
-        .media_pipeline
+    let mut media_runtime = state
+        .media_runtime
         .lock()
-        .expect("media pipeline lock poisoned");
-    media_pipeline.stop();
-    drop(media_pipeline);
+        .expect("media runtime lock poisoned");
+    if let Some(mut runtime) = media_runtime.take() {
+        runtime.stop();
+    }
+    drop(media_runtime);
 
     host_status(state)
 }
@@ -213,6 +239,55 @@ fn stop_signaling(state: tauri::State<'_, AppState>) -> HostStatus {
     drop(signaling);
 
     host_status(state)
+}
+
+fn spawn_media_runtime(
+    media_pipeline: Arc<Mutex<MediaPipeline>>,
+    peer_gateway: SharedWebRtcPeerGateway,
+) -> Result<MediaRuntime, String> {
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let join_handle = thread::Builder::new()
+        .name("remote-poe-media".to_string())
+        .spawn(move || {
+            if let Ok(mut pipeline) = media_pipeline.lock() {
+                pipeline.start();
+            }
+
+            loop {
+                let frame_interval = media_frame_interval(&media_pipeline);
+                let encoded_frame = media_pipeline
+                    .lock()
+                    .ok()
+                    .and_then(|mut pipeline| pipeline.capture_and_encode_once().ok());
+
+                if let Some(frame) = encoded_frame {
+                    let _ = peer_gateway.push_encoded_frame(&frame);
+                }
+
+                match shutdown_rx.recv_timeout(frame_interval) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+
+            if let Ok(mut pipeline) = media_pipeline.lock() {
+                pipeline.stop();
+            }
+        })
+        .map_err(|error| format!("failed to start media thread: {error}"))?;
+
+    Ok(MediaRuntime {
+        shutdown: Some(shutdown_tx),
+        join_handle: Some(join_handle),
+    })
+}
+
+fn media_frame_interval(media_pipeline: &Arc<Mutex<MediaPipeline>>) -> Duration {
+    let fps = media_pipeline
+        .lock()
+        .map(|pipeline| pipeline.config().fps.max(1))
+        .unwrap_or(60);
+    Duration::from_millis((1000 / fps.max(1)) as u64)
 }
 
 #[tauri::command]
@@ -269,7 +344,7 @@ fn main() {
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
     let peer_gateway = build_peer_gateway();
-    let media_pipeline = build_media_pipeline();
+    let media_pipeline = Arc::new(Mutex::new(build_media_pipeline()));
 
     tauri::Builder::default()
         .manage(AppState {
@@ -284,7 +359,8 @@ fn main() {
             input_injector,
             peer_state,
             peer_gateway,
-            media_pipeline: Mutex::new(media_pipeline),
+            media_pipeline,
+            media_runtime: Mutex::new(None),
             signaling: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
