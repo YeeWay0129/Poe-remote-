@@ -1,18 +1,24 @@
 use crate::{WebRtcPeerError, WebRtcPeerGateway, WebRtcPeerResponse};
 use host_core::signaling::IceCandidatePayload;
+use media::Sample;
 use media_pipeline::EncodedFrame;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use webrtc::api::APIBuilder;
+use webrtc::api::media_engine::MIME_TYPE_H264;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 pub struct RealWebRtcPeerGateway {
     runtime: Runtime,
     peer_connection: Mutex<Option<Arc<RTCPeerConnection>>>,
+    media_track: Mutex<Option<Arc<TrackLocalStaticSample>>>,
 }
 
 impl RealWebRtcPeerGateway {
@@ -25,16 +31,30 @@ impl RealWebRtcPeerGateway {
         Ok(Self {
             runtime,
             peer_connection: Mutex::new(None),
+            media_track: Mutex::new(None),
         })
     }
 
-    async fn build_peer_connection() -> Result<Arc<RTCPeerConnection>, WebRtcPeerError> {
+    async fn build_peer_connection()
+    -> Result<(Arc<RTCPeerConnection>, Arc<TrackLocalStaticSample>), WebRtcPeerError> {
         let api = APIBuilder::new().build();
         let peer_connection = Arc::new(
             api.new_peer_connection(RTCConfiguration::default())
                 .await
                 .map_err(|_| WebRtcPeerError::BackendUnavailable)?,
         );
+        let video_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_H264.to_owned(),
+                ..Default::default()
+            },
+            "video".to_string(),
+            "remote-poe".to_string(),
+        ));
+        peer_connection
+            .add_track(video_track.clone())
+            .await
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)?;
 
         peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
             Box::pin(async move {
@@ -47,7 +67,7 @@ impl RealWebRtcPeerGateway {
             })
         }));
 
-        Ok(peer_connection)
+        Ok((peer_connection, video_track))
     }
 
     async fn accept_offer_async(
@@ -84,7 +104,7 @@ impl WebRtcPeerGateway for RealWebRtcPeerGateway {
             return Err(WebRtcPeerError::InvalidOffer);
         }
 
-        let peer_connection = self.runtime.block_on(Self::build_peer_connection())?;
+        let (peer_connection, media_track) = self.runtime.block_on(Self::build_peer_connection())?;
         let response = self.runtime.block_on(Self::accept_offer_async(
             peer_connection.clone(),
             offer_sdp.to_string(),
@@ -94,6 +114,10 @@ impl WebRtcPeerGateway for RealWebRtcPeerGateway {
             .peer_connection
             .lock()
             .map_err(|_| WebRtcPeerError::BackendUnavailable)? = Some(peer_connection);
+        *self
+            .media_track
+            .lock()
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)? = Some(media_track);
 
         Ok(response)
     }
@@ -121,7 +145,21 @@ impl WebRtcPeerGateway for RealWebRtcPeerGateway {
             .map_err(|_| WebRtcPeerError::InvalidOffer)
     }
 
-    fn push_encoded_frame(&self, _frame: &EncodedFrame) -> Result<(), WebRtcPeerError> {
-        Ok(())
+    fn push_encoded_frame(&self, frame: &EncodedFrame) -> Result<(), WebRtcPeerError> {
+        let media_track = self
+            .media_track
+            .lock()
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)?
+            .clone()
+            .ok_or(WebRtcPeerError::BackendUnavailable)?;
+        let sample = Sample {
+            data: frame.data.clone().into(),
+            duration: Duration::from_millis(16),
+            ..Default::default()
+        };
+
+        self.runtime
+            .block_on(async move { media_track.write_sample(&sample).await })
+            .map_err(|_| WebRtcPeerError::BackendUnavailable)
     }
 }

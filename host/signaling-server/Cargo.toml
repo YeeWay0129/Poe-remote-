@@ -8,12 +8,13 @@ path = "src/lib.rs"
 
 [features]
 default = []
-real-webrtc = ["dep:webrtc"]
+real-webrtc = ["dep:media", "dep:webrtc"]
 
 [dependencies]
 futures-util = "0.3"
 host-core = { path = "../host-core" }
 media-pipeline = { path = "../media-pipeline" }
+media = { version = "0.17.1", package = "webrtc-media", optional = true }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync"] }
 tokio-tungstenite = "0.27"
