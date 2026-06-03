@@ -641,6 +641,20 @@ impl SignalingServer {
         result
     }
 
+    pub fn handle_control_message(&self, text: &str) -> Result<ServerEvent, SignalingFrameError> {
+        let result = self.handle_text_frame_inner(text)?;
+        let event = match result {
+            FrameResult::Accepted(ServerEvent::InputInjected) => ServerEvent::InputInjected,
+            FrameResult::Accepted(_)
+            | FrameResult::AcceptedWithReplies { .. }
+            | FrameResult::Reply(_) => {
+                return Err(SignalingFrameError::UnsupportedMessage);
+            }
+        };
+        self.record_frame_result(&Ok(FrameResult::Accepted(event.clone())));
+        Ok(event)
+    }
+
     fn handle_text_frame_inner(&self, text: &str) -> Result<FrameResult, SignalingFrameError> {
         let message: SignalingMessage =
             serde_json::from_str(text).map_err(|_| SignalingFrameError::InvalidJson)?;
@@ -1308,6 +1322,46 @@ mod tests {
         server.handle_text_frame(&json).expect("frame accepted");
 
         assert_eq!(injector.snapshot(), vec!["keyboard down 87".to_string()]);
+    }
+
+    #[test]
+    fn control_message_injects_input_event() {
+        let injector = Arc::new(RecordingInputInjector::new(8));
+        let server = SignalingServer::from_shared_parts_with_input(
+            Arc::new(Mutex::new(HostConfig::new("hash"))),
+            Arc::new(Mutex::new(SignalingEventLog::new(8))),
+            injector.clone(),
+        );
+        let message = SignalingMessage::input_event(
+            "control-1",
+            InputEvent::Keyboard {
+                key_code: 87,
+                action: KeyAction::Down,
+            },
+        );
+        let json = serde_json::to_string(&message).expect("message serializes");
+
+        assert_eq!(
+            server.handle_control_message(&json),
+            Ok(ServerEvent::InputInjected)
+        );
+        assert_eq!(injector.snapshot(), vec!["keyboard down 87".to_string()]);
+        assert_eq!(
+            server.snapshot_recent_events().unwrap(),
+            vec!["accepted: input injected".to_string()]
+        );
+    }
+
+    #[test]
+    fn control_message_rejects_non_input_signaling() {
+        let server = SignalingServer::new(HostConfig::new("hash"));
+        let message = SignalingMessage::stream_config("control-2", StreamConfig::fallback_720p60());
+        let json = serde_json::to_string(&message).expect("message serializes");
+
+        assert_eq!(
+            server.handle_control_message(&json),
+            Err(SignalingFrameError::UnsupportedMessage)
+        );
     }
 
     #[test]
