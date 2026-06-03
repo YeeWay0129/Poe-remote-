@@ -35,6 +35,8 @@ function App() {
   const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pairingPassword, setPairingPassword] = useState("");
+  const [streamPreset, setStreamPreset] = useState("1080p60");
+  const [bitrateKbps, setBitrateKbps] = useState(12000);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
 
   async function refreshStatus() {
@@ -101,6 +103,27 @@ function App() {
       await refreshStatus();
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  async function saveStreamConfig() {
+    const preset = streamPreset === "720p60"
+      ? { width: 1280, height: 720, fps: 60 }
+      : { width: 1920, height: 1080, fps: 60 };
+
+    try {
+      const nextStatus = await invoke<HostStatus>("update_stream_config", {
+        request: {
+          ...preset,
+          bitrateKbps,
+        },
+      });
+      setStatus(nextStatus);
+      setSettingsMessage("Stream config saved.");
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+      setSettingsMessage(null);
     }
   }
 
@@ -190,6 +213,26 @@ function App() {
         </div>
         <p className="muted">Android 配對時要輸入相同密碼。預設密碼是 remote-poe。</p>
         {settingsMessage && <p className="success">{settingsMessage}</p>}
+      </section>
+
+      <section className="panel settings-panel">
+        <h2>串流設定</h2>
+        <div className="settings-row">
+          <select value={streamPreset} onChange={(event) => setStreamPreset(event.currentTarget.value)}>
+            <option value="1080p60">1080p60</option>
+            <option value="720p60">720p60</option>
+          </select>
+          <input
+            type="number"
+            min="1000"
+            max="50000"
+            step="500"
+            value={bitrateKbps}
+            onChange={(event) => setBitrateKbps(Number(event.currentTarget.value))}
+          />
+          <button onClick={saveStreamConfig}>儲存</button>
+        </div>
+        <p className="muted">目前設定：{status?.streamLabel ?? "尚未讀取"}</p>
       </section>
 
       <section className="panel">

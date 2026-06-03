@@ -69,7 +69,8 @@ small {
   flex-wrap: wrap;
 }
 
-input {
+input,
+select {
   min-width: 240px;
   padding: 10px 12px;
   border: 1px solid #c9d1dd;

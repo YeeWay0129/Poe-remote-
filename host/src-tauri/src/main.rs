@@ -97,6 +97,15 @@ struct PairingPasswordDto {
     password_hash: String,
 }
 
+#[derive(serde::Deserialize)]
+struct StreamConfigDto {
+    width: u32,
+    height: u32,
+    fps: u32,
+    #[serde(rename = "bitrateKbps")]
+    bitrate_kbps: u32,
+}
+
 struct AppState {
     config_path: PathBuf,
     config: SharedHostConfig,
@@ -271,6 +280,39 @@ fn update_pairing_password(
     Ok(host_status(state))
 }
 
+#[tauri::command]
+fn update_stream_config(
+    state: tauri::State<'_, AppState>,
+    request: StreamConfigDto,
+) -> Result<HostStatus, String> {
+    let next_stream = StreamConfig {
+        width: request.width,
+        height: request.height,
+        fps: request.fps,
+        bitrate_kbps: request.bitrate_kbps,
+        codec: host_core::stream::VideoCodec::H264,
+        display_id: None,
+    };
+    if !next_stream.is_supported_v1() {
+        return Err("unsupported stream config".to_string());
+    }
+
+    {
+        let mut config = state.config.lock().expect("config lock poisoned");
+        config.stream = next_stream.clone();
+        save_config(&state.config_path, &config)
+            .map_err(|error| format!("failed to save config: {error:?}"))?;
+    }
+    state
+        .media_pipeline
+        .lock()
+        .expect("media pipeline lock poisoned")
+        .set_config(next_stream)
+        .map_err(|error| format!("failed to update media pipeline: {error:?}"))?;
+
+    Ok(host_status(state))
+}
+
 fn spawn_media_runtime(
     media_pipeline: Arc<Mutex<MediaPipeline>>,
     peer_gateway: SharedWebRtcPeerGateway,
@@ -420,6 +462,7 @@ fn main() {
             start_signaling,
             stop_signaling,
             update_pairing_password,
+            update_stream_config,
             pair_device,
             trusted_devices,
             revoke_device
