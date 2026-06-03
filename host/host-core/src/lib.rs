@@ -1,8 +1,12 @@
+pub mod config_store;
+
 pub mod config {
     use crate::pairing::TrustedDevice;
     use crate::stream::StreamConfig;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct HostConfig {
         pub pairing_password_hash: String,
         pub trusted_devices: Vec<TrustedDevice>,

@@ -1,4 +1,5 @@
 use host_core::config::HostConfig;
+use host_core::config_store::{load_config, save_config};
 use host_core::pairing::{PairingDecision, PairingRequest, evaluate_pairing};
 use host_core::stream::StreamConfig;
 #[cfg(not(all(feature = "media-windows-mf-h264", windows)))]
@@ -21,6 +22,7 @@ use signaling_server::{
     spawn_plain_ws_server,
 };
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -87,6 +89,7 @@ struct TrustedDeviceDto {
 }
 
 struct AppState {
+    config_path: PathBuf,
     config: SharedHostConfig,
     event_log: SharedEventLog,
     recording_input_injector: Arc<RecordingInputInjector>,
@@ -290,6 +293,12 @@ fn media_frame_interval(media_pipeline: &Arc<Mutex<MediaPipeline>>) -> Duration 
     Duration::from_millis((1000 / fps.max(1)) as u64)
 }
 
+fn host_config_path() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("remote-poe-host-config.json")
+}
+
 #[tauri::command]
 fn pair_device(
     state: tauri::State<'_, AppState>,
@@ -309,6 +318,8 @@ fn pair_device(
     match decision {
         PairingDecision::Trusted(device) => {
             config.trust_device(device.clone());
+            save_config(&state.config_path, &config)
+                .map_err(|error| format!("failed to save config: {error:?}"))?;
             Ok(TrustedDeviceDto {
                 device_id: device.device_id,
                 device_name: device.device_name,
@@ -336,7 +347,11 @@ fn trusted_devices(state: tauri::State<'_, AppState>) -> Vec<TrustedDeviceDto> {
 #[tauri::command]
 fn revoke_device(state: tauri::State<'_, AppState>, device_id: String) -> bool {
     let mut config = state.config.lock().expect("config lock poisoned");
-    config.revoke_device(&device_id)
+    let revoked = config.revoke_device(&device_id);
+    if revoked {
+        let _ = save_config(&state.config_path, &config);
+    }
+    revoked
 }
 
 fn main() {
@@ -345,15 +360,18 @@ fn main() {
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
     let peer_gateway = build_peer_gateway();
     let media_pipeline = Arc::new(Mutex::new(build_media_pipeline()));
+    let config_path = host_config_path();
+    let config = load_config(&config_path, "").unwrap_or_else(|_| HostConfig {
+        pairing_password_hash: String::new(),
+        trusted_devices: Vec::new(),
+        stream: StreamConfig::default(),
+        autostart: false,
+    });
 
     tauri::Builder::default()
         .manage(AppState {
-            config: Arc::new(Mutex::new(HostConfig {
-                pairing_password_hash: String::new(),
-                trusted_devices: Vec::new(),
-                stream: StreamConfig::default(),
-                autostart: false,
-            })),
+            config_path,
+            config: Arc::new(Mutex::new(config)),
             event_log: Arc::new(Mutex::new(SignalingEventLog::new(64))),
             recording_input_injector,
             input_injector,
