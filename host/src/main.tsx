@@ -24,15 +24,27 @@ type HostStatus = {
   iceCandidates: number;
 };
 
+type TrustedDevice = {
+  deviceId: string;
+  deviceName: string;
+  publicKey: string;
+};
+
 function App() {
   const [status, setStatus] = useState<HostStatus | null>(null);
+  const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pairingPassword, setPairingPassword] = useState("");
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
 
   async function refreshStatus() {
     try {
-      setStatus(await invoke<HostStatus>("host_status"));
+      const [nextStatus, nextDevices] = await Promise.all([
+        invoke<HostStatus>("host_status"),
+        invoke<TrustedDevice[]>("trusted_devices"),
+      ]);
+      setStatus(nextStatus);
+      setTrustedDevices(nextDevices);
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -80,6 +92,15 @@ function App() {
     } catch (err) {
       setError(String(err));
       setSettingsMessage(null);
+    }
+  }
+
+  async function revokeTrustedDevice(deviceId: string) {
+    try {
+      await invoke<boolean>("revoke_device", { deviceId });
+      await refreshStatus();
+    } catch (err) {
+      setError(String(err));
     }
   }
 
@@ -169,6 +190,25 @@ function App() {
         </div>
         <p className="muted">Android 配對時要輸入相同密碼。預設密碼是 remote-poe。</p>
         {settingsMessage && <p className="success">{settingsMessage}</p>}
+      </section>
+
+      <section className="panel">
+        <h2>信任裝置</h2>
+        {trustedDevices.length === 0 ? (
+          <p className="muted">目前沒有已配對裝置。</p>
+        ) : (
+          <ul className="device-list">
+            {trustedDevices.map((device) => (
+              <li key={device.deviceId}>
+                <div>
+                  <strong>{device.deviceName || device.deviceId}</strong>
+                  <small>{device.deviceId}</small>
+                </div>
+                <button onClick={() => revokeTrustedDevice(device.deviceId)}>撤銷</button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="panel">
