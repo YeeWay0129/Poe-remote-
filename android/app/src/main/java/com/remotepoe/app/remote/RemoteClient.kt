@@ -7,10 +7,22 @@ import org.webrtc.VideoTrack
 class RemoteClient @JvmOverloads constructor(
     private val transport: SignalingTransport = OkHttpSignalingTransport(),
     private val peerConnection: PeerConnectionGateway = NoopPeerConnectionGateway(),
+    private val deviceIdentity: DeviceIdentity = DeviceIdentity.developmentDefault(),
     private val callbackDispatcher: ((() -> Unit) -> Unit)? = null,
 ) {
+    constructor(
+        transport: SignalingTransport,
+        peerConnection: PeerConnectionGateway,
+        callbackDispatcher: ((() -> Unit) -> Unit)?,
+    ) : this(
+        transport = transport,
+        peerConnection = peerConnection,
+        deviceIdentity = DeviceIdentity.developmentDefault(),
+        callbackDispatcher = callbackDispatcher,
+    )
+
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
-    private var signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
+    private var signalingSession = SignalingSession(deviceIdentity)
     private var offerStarted = false
 
     var onConnectionChanged: ((ConnectionState, String?) -> Unit)? = null
@@ -59,7 +71,7 @@ class RemoteClient @JvmOverloads constructor(
         }
 
         offerStarted = false
-        signalingSession = SignalingSession(DeviceIdentity.developmentDefault(), streamConfig)
+        signalingSession = SignalingSession(deviceIdentity, streamConfig)
         val url = host.toSignalingUrl()
         val initialMessages = signalingSession.start(password)
         return transport.connect(url, initialMessages).toConnectionState()
@@ -68,7 +80,7 @@ class RemoteClient @JvmOverloads constructor(
     fun disconnect() {
         transport.close()
         peerConnection.close()
-        signalingSession = SignalingSession(DeviceIdentity.developmentDefault())
+        signalingSession = SignalingSession(deviceIdentity)
         offerStarted = false
     }
 

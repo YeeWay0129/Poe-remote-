@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.remotepoe.app.remote.AndroidWebRtcPeerConnectionGateway
 import com.remotepoe.app.remote.ConnectionState
+import com.remotepoe.app.remote.DeviceIdentityStore
 import com.remotepoe.app.remote.PointerMode
 import com.remotepoe.app.remote.RemoteClient
 import com.remotepoe.app.remote.RemoteInputEvent
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         remoteClient = RemoteClient(
+            deviceIdentity = DeviceIdentityStore(applicationContext).loadOrCreate(),
             peerConnection = AndroidWebRtcPeerConnectionGateway(applicationContext),
         )
         enterImmersiveMode()
