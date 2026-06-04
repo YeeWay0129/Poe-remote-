@@ -22,6 +22,7 @@ type HostStatus = {
   lastOfferBytes: number | null;
   lastAnswerBytes: number | null;
   iceCandidates: number;
+  autostart: boolean;
 };
 
 type TrustedDevice = {
@@ -59,16 +60,9 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function toggleStreaming() {
-    await invoke(status?.streaming ? "stop_streaming" : "start_streaming");
-    await refreshStatus();
-  }
-
-  async function toggleSignaling() {
+  async function runStatusCommand(command: string) {
     try {
-      const nextStatus = await invoke<HostStatus>(
-        status?.signalingRunning ? "stop_signaling" : "start_signaling",
-      );
+      const nextStatus = await invoke<HostStatus>(command);
       setStatus(nextStatus);
       setError(null);
     } catch (err) {
@@ -76,9 +70,31 @@ function App() {
     }
   }
 
+  async function toggleStreaming() {
+    await runStatusCommand(status?.streaming ? "stop_streaming" : "start_streaming");
+  }
+
+  async function toggleSignaling() {
+    await runStatusCommand(status?.signalingRunning ? "stop_signaling" : "start_signaling");
+  }
+
+  async function toggleAutostart() {
+    try {
+      const nextStatus = await invoke<HostStatus>("update_autostart", {
+        request: { enabled: !status?.autostart },
+      });
+      setStatus(nextStatus);
+      setSettingsMessage(nextStatus.autostart ? "已設定開機啟動。" : "已關閉開機啟動。");
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+      setSettingsMessage(null);
+    }
+  }
+
   async function savePairingPassword() {
     if (!pairingPassword) {
-      setError("Pairing password is required.");
+      setError("請輸入配對密碼。");
       return;
     }
 
@@ -89,7 +105,7 @@ function App() {
       });
       setStatus(nextStatus);
       setPairingPassword("");
-      setSettingsMessage("Pairing password saved.");
+      setSettingsMessage("配對密碼已儲存。");
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -107,9 +123,10 @@ function App() {
   }
 
   async function saveStreamConfig() {
-    const preset = streamPreset === "720p60"
-      ? { width: 1280, height: 720, fps: 60 }
-      : { width: 1920, height: 1080, fps: 60 };
+    const preset =
+      streamPreset === "720p60"
+        ? { width: 1280, height: 720, fps: 60 }
+        : { width: 1920, height: 1080, fps: 60 };
 
     try {
       const nextStatus = await invoke<HostStatus>("update_stream_config", {
@@ -119,7 +136,7 @@ function App() {
         },
       });
       setStatus(nextStatus);
-      setSettingsMessage("Stream config saved.");
+      setSettingsMessage("串流設定已儲存。");
       setError(null);
     } catch (err) {
       setError(String(err));
@@ -134,70 +151,39 @@ function App() {
     <main>
       <header>
         <h1>遠端 POE Host</h1>
-        <p>
-          Windows 主機負責配對、signaling、輸入注入與後續串流管線；Android
-          端透過 LAN 或 VPN 位址連線。
-        </p>
+        <p>Windows 端背景程式，負責串流畫面、接收 Android 連線，並轉送鍵盤滑鼠操作。</p>
       </header>
 
       <section className="panel status-grid">
-        <div>
-          <span className="label">Signaling</span>
-          <strong>{status?.signalingRunning ? "執行中" : "已停止"}</strong>
-          <small>{status?.signalingEndpoint ?? "ws://0.0.0.0:7443/signaling"}</small>
-        </div>
-        <div>
-          <span className="label">輸入後端</span>
-          <strong>{status?.inputBackend ?? "載入中"}</strong>
-        </div>
-        <div>
-          <span className="label">串流</span>
-          <strong>{status?.streaming ? "執行中" : "已停止"}</strong>
-        </div>
-        <div>
-          <span className="label">Media backend</span>
-          <strong>{status?.mediaBackend ?? "recording capture + null h264 encoder"}</strong>
-          <small>{status?.encodedFrames ?? 0} encoded frames</small>
-        </div>
-        <div>
-          <span className="label">串流設定</span>
-          <strong>{status?.streamLabel ?? "載入中"}</strong>
-        </div>
-        <div>
-          <span className="label">信任裝置</span>
-          <strong>{status?.trustedDevices ?? 0}</strong>
-        </div>
+        <StatusItem
+          label="Signaling"
+          value={status?.signalingRunning ? "執行中" : "未啟動"}
+          detail={status?.signalingEndpoint ?? "ws://0.0.0.0:7443/signaling"}
+        />
+        <StatusItem label="串流" value={status?.streaming ? "執行中" : "未啟動"} />
+        <StatusItem label="串流設定" value={status?.streamLabel ?? "載入中"} />
+        <StatusItem label="信任裝置" value={String(status?.trustedDevices ?? 0)} />
+        <StatusItem label="開機啟動" value={status?.autostart ? "已啟用" : "已關閉"} />
         <div className="actions">
           <button onClick={toggleSignaling}>
             {status?.signalingRunning ? "停止 Signaling" : "啟動 Signaling"}
           </button>
-          <button onClick={toggleStreaming}>
-            {status?.streaming ? "停止串流" : "啟動串流"}
+          <button onClick={toggleStreaming}>{status?.streaming ? "停止串流" : "啟動串流"}</button>
+          <button className="secondary" onClick={toggleAutostart}>
+            {status?.autostart ? "關閉開機啟動" : "開啟開機啟動"}
           </button>
         </div>
       </section>
 
       <section className="panel status-grid">
-        <div>
-          <span className="label">WebRTC phase</span>
-          <strong>{status?.peerPhase ?? "idle"}</strong>
-        </div>
-        <div>
-          <span className="label">WebRTC backend</span>
-          <strong>{status?.peerBackend ?? "recording webrtc"}</strong>
-        </div>
-        <div>
-          <span className="label">Offer SDP</span>
-          <strong>{formatBytes(status?.lastOfferBytes)}</strong>
-        </div>
-        <div>
-          <span className="label">Answer SDP</span>
-          <strong>{formatBytes(status?.lastAnswerBytes)}</strong>
-        </div>
-        <div>
-          <span className="label">ICE candidates</span>
-          <strong>{status?.iceCandidates ?? 0}</strong>
-        </div>
+        <StatusItem label="WebRTC 狀態" value={status?.peerPhase ?? "idle"} />
+        <StatusItem label="WebRTC 後端" value={status?.peerBackend ?? "recording webrtc"} />
+        <StatusItem label="媒體後端" value={status?.mediaBackend ?? "recording capture + null h264 encoder"} />
+        <StatusItem label="Offer SDP" value={formatBytes(status?.lastOfferBytes)} />
+        <StatusItem label="Answer SDP" value={formatBytes(status?.lastAnswerBytes)} />
+        <StatusItem label="ICE 數量" value={String(status?.iceCandidates ?? 0)} />
+        <StatusItem label="已編碼影格" value={String(status?.encodedFrames ?? 0)} />
+        <StatusItem label="最後輸出大小" value={formatBytes(status?.lastEncodedBytes)} />
       </section>
 
       <section className="panel settings-panel">
@@ -207,11 +193,11 @@ function App() {
             type="password"
             value={pairingPassword}
             onChange={(event) => setPairingPassword(event.currentTarget.value)}
-            placeholder="新的配對密碼"
+            placeholder="輸入新的配對密碼"
           />
           <button onClick={savePairingPassword}>儲存</button>
         </div>
-        <p className="muted">Android 配對時要輸入相同密碼。預設密碼是 remote-poe。</p>
+        <p className="muted">Android 第一次連線要輸入這組密碼；預設密碼是 remote-poe。</p>
         {settingsMessage && <p className="success">{settingsMessage}</p>}
       </section>
 
@@ -230,7 +216,7 @@ function App() {
             value={bitrateKbps}
             onChange={(event) => setBitrateKbps(Number(event.currentTarget.value))}
           />
-          <button onClick={saveStreamConfig}>儲存</button>
+          <button onClick={saveStreamConfig}>套用</button>
         </div>
         <p className="muted">目前設定：{status?.streamLabel ?? "尚未讀取"}</p>
       </section>
@@ -247,7 +233,9 @@ function App() {
                   <strong>{device.deviceName || device.deviceId}</strong>
                   <small>{device.deviceId}</small>
                 </div>
-                <button onClick={() => revokeTrustedDevice(device.deviceId)}>撤銷</button>
+                <button className="danger" onClick={() => revokeTrustedDevice(device.deviceId)}>
+                  移除
+                </button>
               </li>
             ))}
           </ul>
@@ -256,37 +244,12 @@ function App() {
 
       <section className="panel">
         <h2>最近 Signaling 事件</h2>
-        {recentEvents.length === 0 ? (
-          <p className="muted">尚未收到 Android 連線事件。</p>
-        ) : (
-          <ul className="event-list">
-            {recentEvents.map((event, index) => (
-              <li key={`${event}-${index}`}>{event}</li>
-            ))}
-          </ul>
-        )}
+        <EventList events={recentEvents} emptyText="尚未收到 Android 連線事件。" />
       </section>
 
       <section className="panel">
         <h2>最近輸入事件</h2>
-        {recentInputEvents.length === 0 ? (
-          <p className="muted">尚未收到鍵盤或滑鼠輸入。</p>
-        ) : (
-          <ul className="event-list">
-            {recentInputEvents.map((event, index) => (
-              <li key={`${event}-${index}`}>{event}</li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="panel">
-        <h2>下一步</h2>
-        <ul>
-          <li>把 Android 的 offer/answer/ice API 接到實際 WebRTC peer connection。</li>
-          <li>Host 串接 Windows Graphics Capture、H.264 編碼與 WebRTC media track。</li>
-          <li>補上持久化設定、系統匣與開機啟動選項。</li>
-        </ul>
+        <EventList events={recentInputEvents} emptyText="尚未收到外接鍵盤滑鼠事件。" />
       </section>
 
       {error && <p className="error">{error}</p>}
@@ -294,8 +257,32 @@ function App() {
   );
 }
 
+function StatusItem({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div>
+      <span className="label">{label}</span>
+      <strong>{value}</strong>
+      {detail && <small>{detail}</small>}
+    </div>
+  );
+}
+
+function EventList({ events, emptyText }: { events: string[]; emptyText: string }) {
+  if (events.length === 0) {
+    return <p className="muted">{emptyText}</p>;
+  }
+
+  return (
+    <ul className="event-list">
+      {events.map((event, index) => (
+        <li key={`${event}-${index}`}>{event}</li>
+      ))}
+    </ul>
+  );
+}
+
 function formatBytes(bytes: number | null | undefined): string {
-  if (!bytes) return "尚未收到";
+  if (!bytes) return "尚無資料";
 
   return `${bytes} bytes`;
 }

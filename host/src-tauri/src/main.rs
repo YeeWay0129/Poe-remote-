@@ -23,12 +23,20 @@ use signaling_server::{
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use tauri::{
+    Manager, WindowEvent,
+    menu::MenuBuilder,
+    tray::TrayIconBuilder,
+};
 
 const DEFAULT_PAIRING_PASSWORD_HASH: &str =
     "c53fb561532b1638f6ce48c7992eb69eda7780a3af1b0205d40342b922a77c19";
+const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+const WINDOWS_RUN_VALUE: &str = "RemotePoeHost";
 
 #[derive(serde::Serialize)]
 struct HostStatus {
@@ -67,6 +75,7 @@ struct HostStatus {
     last_answer_bytes: Option<usize>,
     #[serde(rename = "iceCandidates")]
     ice_candidates: usize,
+    autostart: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -104,6 +113,11 @@ struct StreamConfigDto {
     fps: u32,
     #[serde(rename = "bitrateKbps")]
     bitrate_kbps: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct AutostartDto {
+    enabled: bool,
 }
 
 struct AppState {
@@ -190,6 +204,7 @@ fn host_status(state: tauri::State<'_, AppState>) -> HostStatus {
         last_offer_bytes: peer_state.last_offer_sdp_bytes,
         last_answer_bytes: peer_state.last_answer_sdp_bytes,
         ice_candidates: peer_state.received_ice_candidates,
+        autostart: config.autostart,
     }
 }
 
@@ -309,6 +324,22 @@ fn update_stream_config(
         .expect("media pipeline lock poisoned")
         .set_config(next_stream)
         .map_err(|error| format!("failed to update media pipeline: {error:?}"))?;
+
+    Ok(host_status(state))
+}
+
+#[tauri::command]
+fn update_autostart(
+    state: tauri::State<'_, AppState>,
+    request: AutostartDto,
+) -> Result<HostStatus, String> {
+    apply_login_autostart(request.enabled)?;
+
+    let mut config = state.config.lock().expect("config lock poisoned");
+    config.autostart = request.enabled;
+    save_config(&state.config_path, &config)
+        .map_err(|error| format!("failed to save config: {error:?}"))?;
+    drop(config);
 
     Ok(host_status(state))
 }
@@ -440,6 +471,7 @@ fn main() {
             stream: StreamConfig::default(),
             autostart: false,
         });
+    let should_autostart_services = config.autostart;
     let config = Arc::new(Mutex::new(config));
     let event_log = Arc::new(Mutex::new(SignalingEventLog::new(64)));
     let peer_gateway = build_peer_gateway(
@@ -462,6 +494,21 @@ fn main() {
             media_runtime: Mutex::new(None),
             signaling: Mutex::new(None),
         })
+        .setup(move |app| {
+            setup_tray(app.handle())?;
+            if should_autostart_services {
+                if let Some(state) = app.try_state::<AppState>() {
+                    let _ = start_background_services(&state);
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             host_status,
             start_streaming,
@@ -470,12 +517,98 @@ fn main() {
             stop_signaling,
             update_pairing_password,
             update_stream_config,
+            update_autostart,
             pair_device,
             trusted_devices,
             revoke_device
         ])
         .run(tauri::generate_context!())
         .expect("failed to run remote POE host");
+}
+
+fn setup_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
+    let menu = MenuBuilder::new(app)
+        .text("show", "開啟 Host")
+        .text("hide", "隱藏到系統匣")
+        .separator()
+        .text("quit", "結束")
+        .build()?;
+
+    let mut tray = TrayIconBuilder::with_id("remote-poe-host")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .tooltip("遠端 POE Host");
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+
+    tray.on_menu_event(|app, event| match event.id().as_ref() {
+        "show" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        "hide" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        "quit" => app.exit(0),
+        _ => {}
+    })
+    .build(app)?;
+
+    Ok(())
+}
+
+fn start_background_services(state: &tauri::State<'_, AppState>) -> Result<(), String> {
+    let _ = start_signaling(state.clone())?;
+    let _ = start_streaming(state.clone())?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_login_autostart(enabled: bool) -> Result<(), String> {
+    if enabled {
+        let exe_path = std::env::current_exe()
+            .map_err(|error| format!("failed to locate host executable: {error}"))?;
+        let command = format!("\"{}\"", exe_path.display());
+        run_reg_command([
+            "add",
+            WINDOWS_RUN_KEY,
+            "/v",
+            WINDOWS_RUN_VALUE,
+            "/t",
+            "REG_SZ",
+            "/d",
+            &command,
+            "/f",
+        ])
+    } else {
+        run_reg_command(["delete", WINDOWS_RUN_KEY, "/v", WINDOWS_RUN_VALUE, "/f"])
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_login_autostart(_enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn run_reg_command<const N: usize>(args: [&str; N]) -> Result<(), String> {
+    let output = Command::new("reg")
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run reg.exe: {error}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("failed to update Windows startup setting: {stderr}"))
+    }
 }
 
 #[cfg(windows)]

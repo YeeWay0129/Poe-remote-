@@ -122,6 +122,15 @@ button {
   cursor: pointer;
 }
 
+button.secondary {
+  color: #20242c;
+  background: #e7ecf3;
+}
+
+button.danger {
+  background: #b42318;
+}
+
 .error {
   color: #b42318;
 }
