@@ -1,63 +1,46 @@
 # 遠端 POE v1 協定
 
-## 連線模型
+## 連線
 
-Android app 連到 Windows host 的 signaling endpoint。LAN 與 VPN 使用相同流程：
+- Android 連到 `ws://<host>:7443/signaling`。
+- 外網預設依賴 Tailscale 或 ZeroTier，不提供公開 relay。
+- `wss://` 可作為後續部署選項；目前假設 VPN/LAN 已提供傳輸保護。
 
-- 手動輸入 `ws://<host>:7443/signaling`，或輸入 host/IP 後由 Android 補成 WebSocket URL。
-- 外網預設依賴 Tailscale/ZeroTier IP。
-- 首版不提供公開帳號、NAT 穿透或 relay。
-- WSS/TLS 先保留為可部署選項，目前 host 以 VPN/LAN 的 plain WebSocket 為主。
-
-## 訊息外框
-
-所有 signaling 訊息共用下列外框：
+## 訊息格式
 
 ```json
 {
   "type": "auth",
-  "requestId": "uuid-or-client-request-id",
+  "requestId": "client-request-id",
   "payload": {}
 }
 ```
 
-Host 會驗證 `type` 與 `payload` 形狀是否相符，`requestId` 不可為空。
+支援 type：
 
-## 訊息類型
+- `auth`
+- `device_info`
+- `stream_config`
+- `offer`
+- `answer`
+- `ice`
+- `input_event`
+- `error`
 
-- `auth`: 固定密碼配對或信任裝置登入。
-- `device_info`: Android 裝置與能力資訊。
-- `stream_config`: 解析度、FPS、bitrate、codec。
-- `offer`: WebRTC SDP offer。
-- `answer`: WebRTC SDP answer。
-- `ice`: ICE candidate。
-- `input_event`: 使用者鍵鼠事件。
-- `error`: 可回復或不可回復錯誤。
-
-## Auth payload
+## Auth
 
 ```json
 {
-  "deviceId": "android-dev-id",
+  "deviceId": "android-device-id",
   "deviceName": "Android tablet",
-  "publicKey": "device-public-key",
+  "publicKey": "base64-public-key",
   "passwordHash": "sha256-password"
 }
 ```
 
-## Device info payload
+Host 先檢查信任裝置；若未信任，密碼正確才加入信任清單並保存。
 
-```json
-{
-  "deviceId": "android-dev-id",
-  "deviceName": "Android tablet",
-  "appVersion": "0.1.0",
-  "supportsExternalKeyboard": true,
-  "supportsExternalMouse": true
-}
-```
-
-## Stream config payload
+## Stream Config
 
 ```json
 {
@@ -70,44 +53,20 @@ Host 會驗證 `type` 與 `payload` 形狀是否相符，`requestId` 不可為�
 }
 ```
 
-支援目標：
+支援：
 
-- 預設: 1920x1080、60 FPS、H.264。
-- fallback: 1280x720、60 FPS、H.264。
-- LAN 延遲目標小於 80ms。
-- VPN 延遲目標小於 150ms。
+- 1920x1080 60 FPS H.264
+- 1280x720 60 FPS H.264
 
-## WebRTC payload
+## WebRTC
 
-SDP offer/answer:
+Android 送 `offer`，Host 回 `answer`。Host 會等待 ICE gathering 完成後再回 answer，讓 SDP 內包含可用 candidate。後續 Android `ice` 會送回 Host。
 
-```json
-{
-  "sdp": "v=0\r\n..."
-}
-```
+輸入事件優先走 WebRTC `control` data channel；若 data channel 尚未開啟，Android fallback 到 WebSocket `input_event`。
 
-ICE candidate:
+## Input Event
 
-```json
-{
-  "candidate": "candidate:...",
-  "sdpMid": "0",
-  "sdpMLineIndex": 0
-}
-```
-
-Host 目前會記錄最後收到的 offer SDP bytes、answer SDP bytes、ICE candidate 數量與最後的 `sdpMid`，供 UI 顯示 signaling 狀態。實際 peer connection 與 media track 仍是後續階段。
-
-Android 目前會在 WebSocket signaling 連線成功後建立本地 WebRTC peer connection，建立 `control` data channel 以產生 offer，並把本地 offer/ICE 透過 signaling 送到 host。Host 回傳 answer/ICE 後，Android 會套用到同一個 peer connection。
-
-輸入事件優先透過 WebRTC `control` data channel 傳送，payload 沿用完整 `input_event` signaling JSON 外框；如果 data channel 尚未開啟或送出失敗，Android 會 fallback 到 WebSocket `input_event`。
-
-Host 目前有可替換的 WebRTC peer gateway skeleton。收到 Android `offer` 後，signaling server 會回送一筆 `answer` 與一筆以上 host `ice` 訊息；目前 backend 是 deterministic recording/stub，後續會替換成真正 WebRTC peer connection、media track 與 data channel。Host 已提供 control payload handler，會接受完整 `input_event` JSON 並走與 WebSocket 相同的輸入驗證/注入規則；非 `input_event` 訊息不允許走 data channel control path。
-
-## Input event payload
-
-鍵盤：
+Keyboard：
 
 ```json
 {
@@ -117,7 +76,9 @@ Host 目前有可替換的 WebRTC peer gateway skeleton。收到 Android `offer`
 }
 ```
 
-滑鼠按鍵：
+`keyCode` 使用 Windows virtual key。Android 端會把 Android keyCode 轉換成 Windows virtual key。
+
+Mouse button：
 
 ```json
 {
@@ -127,7 +88,7 @@ Host 目前有可替換的 WebRTC peer gateway skeleton。收到 Android `offer`
 }
 ```
 
-滑鼠移動：
+Mouse move：
 
 ```json
 {
@@ -138,7 +99,7 @@ Host 目前有可替換的 WebRTC peer gateway skeleton。收到 Android `offer`
 }
 ```
 
-滑鼠滾輪：
+Mouse wheel：
 
 ```json
 {
@@ -148,4 +109,4 @@ Host 目前有可替換的 WebRTC peer gateway skeleton。收到 Android `offer`
 }
 ```
 
-Android 系統攔截的按鍵不保證可轉送。POE 快捷操作不做多鍵巨集，維持一次使用者動作對應一次鍵鼠事件。
+限制：不做多鍵巨集；一個使用者動作只送一個鍵鼠事件。
