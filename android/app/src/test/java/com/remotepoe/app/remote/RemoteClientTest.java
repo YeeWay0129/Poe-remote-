@@ -99,6 +99,14 @@ public class RemoteClientTest {
     }
 
     @Test
+    public void androidKeyCodesMapToWindowsVirtualKeys() {
+        assertEquals(0x57, WindowsVirtualKeyMapperKt.toWindowsVirtualKey(KeyEvent.KEYCODE_W));
+        assertEquals(0x31, WindowsVirtualKeyMapperKt.toWindowsVirtualKey(KeyEvent.KEYCODE_1));
+        assertEquals(0x70, WindowsVirtualKeyMapperKt.toWindowsVirtualKey(KeyEvent.KEYCODE_F1));
+        assertEquals(0x25, WindowsVirtualKeyMapperKt.toWindowsVirtualKey(KeyEvent.KEYCODE_DPAD_LEFT));
+    }
+
+    @Test
     public void inputUsesDataChannelWhenControlChannelAcceptsMessage() {
         RecordingSignalingTransport transport = new RecordingSignalingTransport();
         FakePeerConnectionGateway peer = new FakePeerConnectionGateway();

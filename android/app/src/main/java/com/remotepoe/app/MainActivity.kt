@@ -51,6 +51,7 @@ import com.remotepoe.app.remote.PointerMode
 import com.remotepoe.app.remote.RemoteClient
 import com.remotepoe.app.remote.RemoteInputEvent
 import com.remotepoe.app.remote.StreamConfig
+import com.remotepoe.app.remote.toWindowsVirtualKey
 import kotlin.math.roundToInt
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
@@ -243,7 +244,8 @@ private fun PlayerScreen(
                     KeyEventType.KeyUp -> KeyEvent.ACTION_UP
                     else -> return@onPreviewKeyEvent false
                 }
-                onInput(RemoteInputEvent.Keyboard(keyEvent.key.keyCode.toInt(), action))
+                val virtualKey = keyEvent.key.keyCode.toInt().toWindowsVirtualKey()
+                onInput(RemoteInputEvent.Keyboard(virtualKey, action))
                 true
             }
             .pointerInteropFilter { motionEvent ->
