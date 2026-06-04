@@ -189,7 +189,7 @@ private fun RemoteInputEvent.toJsonObject(): JSONObject =
 
         is RemoteInputEvent.MouseButton -> JSONObject()
             .put("kind", "mouse_button")
-            .put("button", buttonState.toMouseButtonName())
+            .put("button", button.toMouseButtonName())
             .put(
                 "action",
                 if (action == android.view.MotionEvent.ACTION_BUTTON_PRESS) "down" else "up",

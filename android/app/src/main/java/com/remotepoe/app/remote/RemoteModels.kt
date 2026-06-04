@@ -51,7 +51,7 @@ sealed interface RemoteInputEvent {
     ) : RemoteInputEvent
 
     data class MouseButton(
-        val buttonState: Int,
+        val button: Int,
         val action: Int,
     ) : RemoteInputEvent
 

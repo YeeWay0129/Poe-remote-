@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,12 +32,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -46,6 +50,7 @@ import com.remotepoe.app.remote.PointerMode
 import com.remotepoe.app.remote.RemoteClient
 import com.remotepoe.app.remote.RemoteInputEvent
 import com.remotepoe.app.remote.StreamConfig
+import kotlin.math.roundToInt
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -107,7 +112,6 @@ private fun RemotePoeApp(remoteClient: RemoteClient) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             if (state == ConnectionState.Connected) {
                 PlayerScreen(
-                    streamConfig = streamConfig,
                     remoteVideoTrack = remoteVideoTrack,
                     onDisconnect = {
                         remoteClient.disconnect()
@@ -158,7 +162,7 @@ private fun ConnectScreen(
         verticalArrangement = Arrangement.Center,
     ) {
         Text("遠端 POE", color = Color.White, fontSize = 30.sp)
-        Text("連線到 Windows host 的 LAN 或 Tailscale/ZeroTier 位址。", color = Color(0xFFB7C0CF))
+        Text("連到 Windows Host，透過 LAN、Tailscale 或 ZeroTier 遊玩。", color = Color(0xFFB7C0CF))
 
         OutlinedTextField(
             modifier = Modifier
@@ -177,6 +181,7 @@ private fun ConnectScreen(
             onValueChange = onPasswordChange,
             label = { Text("配對密碼") },
             singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
         )
         Row(
             modifier = Modifier.padding(top = 12.dp),
@@ -212,15 +217,23 @@ private fun ConnectScreen(
 @Composable
 @OptIn(ExperimentalComposeUiApi::class)
 private fun PlayerScreen(
-    streamConfig: StreamConfig,
     remoteVideoTrack: VideoTrack?,
     onDisconnect: () -> Unit,
     onInput: (RemoteInputEvent) -> Unit,
 ) {
+    val focusRequester = remember { FocusRequester() }
+    var lastMouseX by remember { mutableStateOf<Float?>(null) }
+    var lastMouseY by remember { mutableStateOf<Float?>(null) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { keyEvent ->
                 val action = when (keyEvent.type) {
@@ -232,7 +245,14 @@ private fun PlayerScreen(
                 true
             }
             .pointerInteropFilter { motionEvent ->
-                forwardPointerEvent(motionEvent, onInput)
+                val nextPosition = forwardPointerEvent(
+                    event = motionEvent,
+                    previousMouseX = lastMouseX,
+                    previousMouseY = lastMouseY,
+                    onInput = onInput,
+                )
+                lastMouseX = nextPosition?.first
+                lastMouseY = nextPosition?.second
                 true
             },
     ) {
@@ -245,7 +265,7 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Button(onClick = onDisconnect) {
-                Text("中斷")
+                Text("斷線")
             }
         }
     }
@@ -295,41 +315,89 @@ private fun RemoteVideoSurface(remoteVideoTrack: VideoTrack?) {
 private fun ConnectionState.statusText(errorMessage: String?): String =
     when (this) {
         ConnectionState.Disconnected -> "尚未連線"
-        ConnectionState.Connecting -> "正在連線到 host signaling..."
+        ConnectionState.Connecting -> "正在連到 Host signaling"
         ConnectionState.Connected -> "已連線"
         ConnectionState.Failed -> errorMessage ?: "連線失敗"
     }
 
 private fun forwardPointerEvent(
     event: MotionEvent,
+    previousMouseX: Float?,
+    previousMouseY: Float?,
     onInput: (RemoteInputEvent) -> Unit,
-) {
-    val source = event.source
-    val isMouse = source and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE
+): Pair<Float, Float>? {
+    val isMouse = event.source and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE
 
+    if (isMouse) {
+        return forwardMouseEvent(event, previousMouseX, previousMouseY, onInput)
+    }
+
+    forwardTouchFallbackEvent(event, onInput)
+    return null
+}
+
+private fun forwardMouseEvent(
+    event: MotionEvent,
+    previousMouseX: Float?,
+    previousMouseY: Float?,
+    onInput: (RemoteInputEvent) -> Unit,
+): Pair<Float, Float>? {
     when (event.actionMasked) {
-        MotionEvent.ACTION_MOVE -> {
-            onInput(
-                RemoteInputEvent.MouseMove(
-                    dx = event.x.toInt(),
-                    dy = event.y.toInt(),
-                    mode = if (isMouse) PointerMode.Relative else PointerMode.Absolute,
-                ),
-            )
+        MotionEvent.ACTION_MOVE,
+        MotionEvent.ACTION_HOVER_MOVE -> {
+            if (previousMouseX != null && previousMouseY != null) {
+                val dx = (event.x - previousMouseX).roundToInt()
+                val dy = (event.y - previousMouseY).roundToInt()
+                if (dx != 0 || dy != 0) {
+                    onInput(RemoteInputEvent.MouseMove(dx, dy, PointerMode.Relative))
+                }
+            }
+            return event.x to event.y
         }
 
         MotionEvent.ACTION_BUTTON_PRESS,
         MotionEvent.ACTION_BUTTON_RELEASE -> {
-            onInput(RemoteInputEvent.MouseButton(event.buttonState, event.actionMasked))
+            onInput(RemoteInputEvent.MouseButton(event.changedButton(), event.actionMasked))
+            return event.x to event.y
         }
 
         MotionEvent.ACTION_SCROLL -> {
             onInput(
                 RemoteInputEvent.MouseWheel(
-                    deltaX = event.getAxisValue(MotionEvent.AXIS_HSCROLL).toInt(),
-                    deltaY = event.getAxisValue(MotionEvent.AXIS_VSCROLL).toInt(),
+                    deltaX = event.getAxisValue(MotionEvent.AXIS_HSCROLL).roundToInt(),
+                    deltaY = event.getAxisValue(MotionEvent.AXIS_VSCROLL).roundToInt(),
                 ),
             )
+            return event.x to event.y
+        }
+
+        MotionEvent.ACTION_HOVER_EXIT,
+        MotionEvent.ACTION_CANCEL -> return null
+    }
+
+    return previousMouseX?.let { x -> previousMouseY?.let { y -> x to y } }
+}
+
+private fun forwardTouchFallbackEvent(
+    event: MotionEvent,
+    onInput: (RemoteInputEvent) -> Unit,
+) {
+    when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+            onInput(RemoteInputEvent.MouseMove(event.x.roundToInt(), event.y.roundToInt(), PointerMode.Absolute))
+            onInput(RemoteInputEvent.MouseButton(MotionEvent.BUTTON_PRIMARY, MotionEvent.ACTION_BUTTON_PRESS))
+        }
+
+        MotionEvent.ACTION_MOVE -> {
+            onInput(RemoteInputEvent.MouseMove(event.x.roundToInt(), event.y.roundToInt(), PointerMode.Absolute))
+        }
+
+        MotionEvent.ACTION_UP,
+        MotionEvent.ACTION_CANCEL -> {
+            onInput(RemoteInputEvent.MouseButton(MotionEvent.BUTTON_PRIMARY, MotionEvent.ACTION_BUTTON_RELEASE))
         }
     }
 }
+
+private fun MotionEvent.changedButton(): Int =
+    if (actionButton != 0) actionButton else buttonState
