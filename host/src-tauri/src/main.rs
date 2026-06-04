@@ -462,7 +462,6 @@ fn main() {
     let recording_input_injector = Arc::new(RecordingInputInjector::new(64));
     let input_injector = build_input_injector(Arc::clone(&recording_input_injector));
     let peer_state = Arc::new(Mutex::new(PeerSignalingState::default()));
-    let media_pipeline = Arc::new(Mutex::new(build_media_pipeline()));
     let config_path = host_config_path();
     let config =
         load_config(&config_path, DEFAULT_PAIRING_PASSWORD_HASH).unwrap_or_else(|_| HostConfig {
@@ -471,6 +470,7 @@ fn main() {
             stream: StreamConfig::default(),
             autostart: false,
         });
+    let media_pipeline = Arc::new(Mutex::new(build_media_pipeline(config.stream.clone())));
     let should_autostart_services = config.autostart;
     let config = Arc::new(Mutex::new(config));
     let event_log = Arc::new(Mutex::new(SignalingEventLog::new(64)));
@@ -676,9 +676,9 @@ fn peer_backend_label() -> &'static str {
     "recording webrtc"
 }
 
-fn build_media_pipeline() -> MediaPipeline {
+fn build_media_pipeline(config: StreamConfig) -> MediaPipeline {
     MediaPipeline::new(
-        StreamConfig::default(),
+        config,
         build_frame_source(),
         build_video_encoder(),
     )
