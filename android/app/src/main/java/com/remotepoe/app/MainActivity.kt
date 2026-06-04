@@ -80,10 +80,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enterImmersiveMode() {
-        window.insetsController?.let { controller ->
-            controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-            controller.systemBarsBehavior =
-                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        window.decorView.post {
+            window.insetsController?.let { controller ->
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
         }
     }
 }
@@ -164,16 +166,15 @@ private fun ConnectScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("遠端 POE", color = Color.White, fontSize = 30.sp)
-        Text("連到 Windows Host，透過 LAN、Tailscale 或 ZeroTier 遊玩。", color = Color(0xFFB7C0CF))
-
+        Text("Remote POE", color = Color.White, fontSize = 30.sp)
+        Text("Connect to Windows Host by LAN, Tailscale, or ZeroTier.", color = Color(0xFFB7C0CF))
         OutlinedTextField(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 24.dp),
             value = host,
             onValueChange = onHostChange,
-            label = { Text("Host 位址") },
+            label = { Text("Host address") },
             singleLine = true,
         )
         OutlinedTextField(
@@ -182,7 +183,7 @@ private fun ConnectScreen(
                 .padding(top = 12.dp),
             value = password,
             onValueChange = onPasswordChange,
-            label = { Text("配對密碼") },
+            label = { Text("Pairing password") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
         )
@@ -212,7 +213,7 @@ private fun ConnectScreen(
             enabled = state != ConnectionState.Connecting,
             onClick = onConnect,
         ) {
-            Text(if (state == ConnectionState.Connecting) "連線中" else "連線")
+            Text(if (state == ConnectionState.Connecting) "Connecting..." else "Connect")
         }
     }
 }
@@ -269,7 +270,7 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Button(onClick = onDisconnect) {
-                Text("斷線")
+                Text("Disconnect")
             }
         }
     }
@@ -318,10 +319,10 @@ private fun RemoteVideoSurface(remoteVideoTrack: VideoTrack?) {
 
 private fun ConnectionState.statusText(errorMessage: String?): String =
     when (this) {
-        ConnectionState.Disconnected -> "尚未連線"
-        ConnectionState.Connecting -> "正在連到 Host signaling"
-        ConnectionState.Connected -> "已連線"
-        ConnectionState.Failed -> errorMessage ?: "連線失敗"
+        ConnectionState.Disconnected -> "Disconnected"
+        ConnectionState.Connecting -> "Connecting to host signaling"
+        ConnectionState.Connected -> "Connected"
+        ConnectionState.Failed -> errorMessage ?: "Connection failed"
     }
 
 private fun forwardPointerEvent(
