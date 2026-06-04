@@ -90,8 +90,15 @@ class OkHttpSignalingTransport(
         pendingMessages.clear()
         pendingMessages += initialMessages
         updateState(TransportState.Connecting, null)
+        val request = try {
+            Request.Builder().url(url).build()
+        } catch (error: IllegalArgumentException) {
+            pendingMessages.clear()
+            updateState(TransportState.Failed, error.message ?: "Invalid signaling URL.")
+            return state
+        }
         socket = client.newWebSocket(
-            Request.Builder().url(url).build(),
+            request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     updateState(TransportState.Connected, null)
