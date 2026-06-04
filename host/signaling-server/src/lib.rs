@@ -29,6 +29,7 @@ pub type SharedEventLog = Arc<Mutex<SignalingEventLog>>;
 pub type SharedInputInjector = Arc<dyn InputInjector>;
 pub type SharedPeerSignalingState = Arc<Mutex<PeerSignalingState>>;
 pub type SharedWebRtcPeerGateway = Arc<dyn WebRtcPeerGateway>;
+type ConfigPersistHook = Arc<dyn Fn(&HostConfig) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebRtcPeerResponse {
@@ -574,6 +575,7 @@ pub struct SignalingServer {
     input_injector: SharedInputInjector,
     peer_state: SharedPeerSignalingState,
     peer_gateway: SharedWebRtcPeerGateway,
+    config_persist_hook: Option<ConfigPersistHook>,
 }
 
 impl SignalingServer {
@@ -637,7 +639,16 @@ impl SignalingServer {
             input_injector,
             peer_state,
             peer_gateway,
+            config_persist_hook: None,
         }
+    }
+
+    pub fn with_config_persist_hook<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&HostConfig) + Send + Sync + 'static,
+    {
+        self.config_persist_hook = Some(Arc::new(hook));
+        self
     }
 
     pub fn snapshot_config(&self) -> Result<HostConfig, SignalingFrameError> {
@@ -713,6 +724,9 @@ impl SignalingServer {
                     .lock()
                     .map_err(|_| SignalingFrameError::StatePoisoned)?;
                 state.stream = config.clone();
+                let persisted_config = state.clone();
+                drop(state);
+                self.persist_config(&persisted_config);
                 Ok(FrameResult::Accepted(ServerEvent::StreamConfigUpdated {
                     width: config.width,
                     height: config.height,
@@ -807,6 +821,9 @@ impl SignalingServer {
             PairingDecision::Trusted(device) => {
                 let device_id = device.device_id.clone();
                 state.trust_device(device);
+                let persisted_config = state.clone();
+                drop(state);
+                self.persist_config(&persisted_config);
                 Ok(FrameResult::Accepted(ServerEvent::DeviceTrusted {
                     device_id,
                 }))
@@ -817,6 +834,12 @@ impl SignalingServer {
                 &format!("Pairing rejected: {reason:?}"),
                 false,
             ))),
+        }
+    }
+
+    fn persist_config(&self, config: &HostConfig) {
+        if let Some(hook) = &self.config_persist_hook {
+            hook(config);
         }
     }
 
@@ -1114,6 +1137,36 @@ mod tests {
     }
 
     #[test]
+    fn auth_frame_persists_new_trusted_device() {
+        let persisted = Arc::new(Mutex::new(Vec::<HostConfig>::new()));
+        let persisted_clone = Arc::clone(&persisted);
+        let server = SignalingServer::new(HostConfig::new("expected-hash"))
+            .with_config_persist_hook(move |config| {
+                persisted_clone.lock().unwrap().push(config.clone());
+            });
+        let message = SignalingMessage::auth(
+            "req-1",
+            PairingRequest {
+                device_id: "tablet-1".to_string(),
+                device_name: "Tablet".to_string(),
+                public_key: "key".to_string(),
+                password_hash: "expected-hash".to_string(),
+            },
+        );
+        let json = serde_json::to_string(&message).expect("message serializes");
+
+        let result = server.handle_text_frame(&json);
+
+        assert!(matches!(
+            result,
+            Ok(FrameResult::Accepted(ServerEvent::DeviceTrusted { .. }))
+        ));
+        let persisted = persisted.lock().unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].trusted_devices[0].device_id, "tablet-1");
+    }
+
+    #[test]
     fn auth_frame_accepts_existing_trusted_device_without_password() {
         let mut config = HostConfig::new("expected-hash");
         config.trust_device(TrustedDevice {
@@ -1156,6 +1209,28 @@ mod tests {
             }))
         );
         assert_eq!(server.snapshot_config().unwrap().stream.width, 1280);
+    }
+
+    #[test]
+    fn stream_config_frame_persists_updated_state() {
+        let persisted = Arc::new(Mutex::new(Vec::<HostConfig>::new()));
+        let persisted_clone = Arc::clone(&persisted);
+        let server = SignalingServer::new(HostConfig::new("hash"))
+            .with_config_persist_hook(move |config| {
+                persisted_clone.lock().unwrap().push(config.clone());
+            });
+        let message = SignalingMessage::stream_config("req-2", StreamConfig::fallback_720p60());
+        let json = serde_json::to_string(&message).expect("message serializes");
+
+        let result = server.handle_text_frame(&json);
+
+        assert!(matches!(
+            result,
+            Ok(FrameResult::Accepted(ServerEvent::StreamConfigUpdated { .. }))
+        ));
+        let persisted = persisted.lock().unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].stream.width, 1280);
     }
 
     #[test]

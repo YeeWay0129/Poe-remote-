@@ -249,7 +249,8 @@ fn start_signaling(state: tauri::State<'_, AppState>) -> Result<HostStatus, Stri
             Arc::clone(&state.input_injector),
             Arc::clone(&state.peer_state),
             Arc::clone(&state.peer_gateway),
-        );
+        )
+        .with_config_persist_hook(config_persist_hook(state.config_path.clone()));
         let runtime = spawn_plain_ws_server(
             server,
             SignalingBindConfig {
@@ -561,6 +562,12 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()>
     .build(app)?;
 
     Ok(())
+}
+
+fn config_persist_hook(config_path: PathBuf) -> impl Fn(&HostConfig) + Send + Sync + 'static {
+    move |config| {
+        let _ = save_config(&config_path, config);
+    }
 }
 
 fn start_background_services(state: &tauri::State<'_, AppState>) -> Result<(), String> {
