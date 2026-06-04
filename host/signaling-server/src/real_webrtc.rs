@@ -4,6 +4,7 @@ use media::Sample;
 use media_pipeline::EncodedFrame;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::time::timeout;
 use tokio::runtime::Runtime;
 use webrtc::api::APIBuilder;
 use webrtc::api::media_engine::MIME_TYPE_H264;
@@ -102,11 +103,17 @@ impl RealWebRtcPeerGateway {
             .create_answer(None)
             .await
             .map_err(|_| WebRtcPeerError::BackendUnavailable)?;
-        let answer_sdp = answer.sdp.clone();
+        let mut gathering_complete = peer_connection.gathering_complete_promise().await;
         peer_connection
             .set_local_description(answer)
             .await
             .map_err(|_| WebRtcPeerError::BackendUnavailable)?;
+        let _ = timeout(Duration::from_secs(2), gathering_complete.recv()).await;
+        let answer_sdp = peer_connection
+            .local_description()
+            .await
+            .map(|description| description.sdp)
+            .ok_or(WebRtcPeerError::BackendUnavailable)?;
 
         Ok(WebRtcPeerResponse {
             answer_sdp,
