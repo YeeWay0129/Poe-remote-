@@ -5,8 +5,10 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import java.nio.charset.StandardCharsets
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.spec.ECGenParameterSpec
 import java.util.UUID
 
@@ -39,22 +41,42 @@ class DeviceIdentityStore(context: Context) {
     }
 
     private fun loadOrCreatePublicKey(): String {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        if (!keyStore.containsAlias(KEY_ALIAS)) {
-            val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
-            val spec = KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
-                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
-            )
-                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                .setDigests(KeyProperties.DIGEST_SHA256)
-                .build()
-            generator.initialize(spec)
-            generator.generateKeyPair()
+        runCatching {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (!keyStore.containsAlias(KEY_ALIAS)) {
+                val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
+                val spec = KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+                )
+                    .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                    .setDigests(KeyProperties.DIGEST_SHA256)
+                    .build()
+                generator.initialize(spec)
+                generator.generateKeyPair()
+            }
+
+            keyStore.getCertificate(KEY_ALIAS).publicKey.encoded
+        }.getOrNull()?.let { publicKey ->
+            return Base64.encodeToString(publicKey, Base64.NO_WRAP)
         }
 
-        val publicKey = keyStore.getCertificate(KEY_ALIAS).publicKey.encoded
-        return Base64.encodeToString(publicKey, Base64.NO_WRAP)
+        return fallbackPublicKey()
+    }
+
+    private fun fallbackPublicKey(): String {
+        val existingFallback = preferences.getString(KEY_FALLBACK_PUBLIC_KEY, null)
+        if (!existingFallback.isNullOrBlank()) return existingFallback
+
+        val seed = "${UUID.randomUUID()}:${deviceName()}"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(seed.toByteArray(StandardCharsets.UTF_8))
+        val fallback = Base64.encodeToString(digest, Base64.NO_WRAP)
+        preferences.edit()
+            .putString(KEY_FALLBACK_PUBLIC_KEY, fallback)
+            .apply()
+
+        return fallback
     }
 
     private fun deviceName(): String =
@@ -69,5 +91,6 @@ class DeviceIdentityStore(context: Context) {
         const val PREFERENCES_NAME = "remote_poe_identity"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_PUBLIC_KEY = "public_key"
+        const val KEY_FALLBACK_PUBLIC_KEY = "fallback_public_key"
     }
 }

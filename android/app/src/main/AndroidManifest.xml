@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="遠端 POE"
+        android:label="Remote POE"
         android:supportsRtl="true"
         android:theme="@style/Theme.RemotePOE">
         <activity
